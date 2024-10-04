@@ -1,0 +1,25 @@
+[project]
+name = "slurmui"
+version = "0.1.0"  # Replace with the appropriate value if __version__ is dynamically fetched
+description = "Terminal UI for Slurm"
+authors = [
+    {name = "Norman Müller", email = "norman.mueller@tum.de"}
+]
+requires-python = ">=3.6"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+dependencies = [
+    # "textual==0.31.0",
+    "textual",
+    "pandas"
+]
+[project.scripts]
+slurmui = "slurmui.slurmui_cli:slurmui_cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
