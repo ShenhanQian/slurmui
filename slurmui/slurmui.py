@@ -1,5 +1,6 @@
 import sys
 import io
+import importlib.metadata
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable
@@ -11,10 +12,6 @@ import subprocess
 import pandas as pd
 import re
 import os
-if __name__ == "__main__":
-    from _version import __version__
-else:
-    from ._version import __version__
 
 
 DEBUG = False
@@ -143,7 +140,7 @@ class SlurmUI(App):
         # also change the title to include GPU information
         total_num_gpus = overview_df["#Total"].sum()
         total_available = overview_df["#Avail"].sum()
-        self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {__version__}"
+        self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {importlib.metadata.version("slurmui")}"
         return overview_df
 
 

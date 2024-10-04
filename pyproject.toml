@@ -1,6 +1,6 @@
 [project]
 name = "slurmui"
-version = "0.1.0"  # Replace with the appropriate value if __version__ is dynamically fetched
+version = "0.3.0.5"
 description = "Terminal UI for Slurm"
 authors = [
     {name = "Norman Müller", email = "norman.mueller@tum.de"}
@@ -13,7 +13,6 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    # "textual==0.31.0",
     "textual",
     "pandas"
 ]
