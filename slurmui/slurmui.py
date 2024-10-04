@@ -21,8 +21,8 @@ DEBUG = False
 if DEBUG:
     from slurmui.debug_strings import SINFO_DEBUG, SQUEUE_DEBUG
 
-class SlurmUI(App):
 
+class SlurmUI(App):
     cluster = None
 
     BINDINGS = [
@@ -35,7 +35,6 @@ class SlurmUI(App):
         Binding("enter", "confirm", "Confirm", priority=True),
         Binding("escape", "abort_quit", "Abort"),
         # ("k", "scroll_up", "Up")    
-
     ]
     STAGE = {"action": "monitor"}
     gpu_overview_df = None
@@ -50,7 +49,6 @@ class SlurmUI(App):
         yield self.header
         yield Container(self.table, self.txt_log)
         yield self.footer
-
     
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
@@ -125,7 +123,6 @@ class SlurmUI(App):
                 self.txt_log.clear()
                 self.txt_log.write(str(e))
 
-
     def action_display_log(self):
         try:
             if self.STAGE["action"] == "monitor":
@@ -138,7 +135,7 @@ class SlurmUI(App):
             self.txt_log.write(str(e))
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
-        overview_df = get_sinfo()
+        overview_df = get_sinfo(self.cluster)
         if sort_column is not None:
             overview_df = overview_df.sort_values(overview_df.columns[sort_column],ascending=sort_ascending)
         
@@ -158,8 +155,6 @@ class SlurmUI(App):
             table_row = [str(x) for x in row[1].values]
             self.table.add_row(*table_row)
         self.table.focus()
-
-
 
     def action_display_gpu(self):
         self.STAGE = {"action": "gpu"}
@@ -184,7 +179,6 @@ class SlurmUI(App):
 
         self.table.cursor_coordinate  = (0,column_idx)
 
-
     def update_log(self, job_id):
         if not DEBUG:
             log_fn = get_log_fn(job_id)
@@ -195,8 +189,6 @@ class SlurmUI(App):
         self.txt_log.clear()
         for text_line in txt_lines:
             self.txt_log.write(text_line)
-
-
 
     def action_confirm(self):
         if self.STAGE["action"] == "monitor":
@@ -209,7 +201,6 @@ class SlurmUI(App):
                 self.txt_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
                 self.update_squeue_table()
                 self.STAGE["action"] = "monitor"
-
 
     def action_abort(self):
         if self.STAGE["action"] == "log":
@@ -225,16 +216,11 @@ class SlurmUI(App):
         else:
             self.action_abort()
 
-
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
 
-
 def parse_gres_used(gres_used_str, num_total):
-    if len(sys.argv) > 1:
-        _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\)", gres_used_str).groups()
-    else:
-        _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\),.*", gres_used_str).groups()
+    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
 
     num_gpus = int(num_gpus)
     alloc_gpus = []
@@ -253,33 +239,32 @@ def parse_gres_used(gres_used_str, num_total):
             "#Alloc": num_gpus,
             "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
 
-
-def parse_gres(gres_str):
-    if len(sys.argv) > 1:
+def parse_gres(gres_str, cluster=None):
+    if cluster == "lrz":
         _,num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
         num_gpus = int(num_gpus)
         return {"Device": "gpu",
                 "#Total": num_gpus}
-
-    else:
+    elif cluster == "tum_vcg":
         _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
         num_gpus = int(num_gpus)
         return {"Device": device,
                 "#Total": num_gpus}
-
+    else:
+        raise ValueError("Cluster not supported: ", cluster)
 
 def remove_first_line(input_string):
     lines = input_string.split('\n')
     return '\n'.join(lines[1:])
 
-
-def get_sinfo():
+def get_sinfo(cluster):
     if DEBUG:
         response_string = SINFO_DEBUG
     else:
-        if len(sys.argv) > 1:
+        if cluster == 'lrz':
             response_string = ""
             partitions = [
+                # "",
                 "-p 'mcml-dgx-a100-40x8'",
                 "-p 'mcml-hgx-a100-80x4'", 
                 "-p 'lrz-dgx-1-v100x8'", 
@@ -288,13 +273,15 @@ def get_sinfo():
                 "-p 'lrz-v100x2'",
             ]
             for p in partitions:
-                s = subprocess.check_output(f"""sinfo --Node {p} -O 'NodeHost,Gres:50,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+                s = subprocess.check_output(f"""sinfo --Node {p} -O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")  # WARNING: insufficient width for any item can crash the prgram
                 if len(response_string) > 0:
                     response_string += remove_first_line(s)
                 else:
                     response_string += s
+        elif cluster == 'tum_vcg':
+            response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
         else:
-            response_string = subprocess.check_output(f"""sinfo -O 'NodeHost,Gres:50,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+            raise ValueError("Cluster not supported: ", cluster)
 
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
@@ -307,7 +294,7 @@ def get_sinfo():
         #     continue
 
         if row[1]['GRES'] != "(null)":
-            host_info = parse_gres(row[1]['GRES'])
+            host_info = parse_gres(row[1]['GRES'], cluster)
         else:
             continue
 
@@ -322,15 +309,14 @@ def get_sinfo():
         host_info['#CPUs Idle'] = cpu_info[1]
         host_info['#CPUs Alloc'] = cpu_info[0]
         host_info['Host'] = str(row[1]["HOSTNAMES"])
+        host_info['Partition'] = str(row[1]["PARTITION"])
 
         overview_df.append(host_info)
     overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
-    overview_df = overview_df[['Host', "Device", "#Avail", "#Total", "Free IDX", "Mem (GB)", "#CPUs Idle", "#CPUs Alloc"]]
+    overview_df = overview_df[['Partition', 'Host', "Device", "#Avail", "#Total", "Free IDX", "Mem (GB)", "#CPUs Idle", "#CPUs Alloc"]]
     return overview_df
 
-
 def get_squeue():
-    
     if DEBUG:
         response_string = SQUEUE_DEBUG
     else:
@@ -353,7 +339,6 @@ def get_job_gpu_ids(job_id):
     except:
         return "N/A"
     return formatted_string
-
 
 def get_log_fn(job_id):
     response_string = subprocess.check_output(f"""scontrol show job {job_id} | grep StdOut""", shell=True).decode("utf-8")
