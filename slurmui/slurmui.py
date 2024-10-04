@@ -59,7 +59,7 @@ class SlurmUI(App):
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
         # add device information
         squeue_df["GPU_IDS"] = "N/A"
-        real_session_mask = squeue_df["PA"]!="in"
+        real_session_mask = squeue_df["PARTITION"]!="in"
         if real_session_mask.any():
             squeue_df["GPU_IDS"][real_session_mask] =squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
         # self.table.columns = []
@@ -318,7 +318,7 @@ def get_squeue():
         response_string = SQUEUE_DEBUG
     else:
         sep = "|"
-        response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%Q{sep}%.2P{sep}%.40j{sep}%.5u{sep}%.8T{sep}%.10M{sep}%.6l{sep}%S{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
+        response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%Q{sep}%.20P{sep}%.40j{sep}%.10u{sep}%.8T{sep}%.10M{sep}%.6l{sep}%S{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=sep)
