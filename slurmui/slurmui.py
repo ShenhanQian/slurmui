@@ -268,7 +268,9 @@ def parse_gres(gres_str):
                 "#Total": num_gpus}
 
 
-
+def remove_first_line(input_string):
+    lines = input_string.split('\n')
+    return '\n'.join(lines[1:])
 
 
 def get_sinfo():
@@ -276,11 +278,24 @@ def get_sinfo():
         response_string = SINFO_DEBUG
     else:
         if len(sys.argv) > 1:
-            # cluster = sys.argv[2]
-            filter_cluster = f"-p 'mcml-dgx-a100-40x8'"
+            response_string = ""
+            partitions = [
+                "-p 'mcml-dgx-a100-40x8'",
+                "-p 'mcml-hgx-a100-80x4'", 
+                "-p 'lrz-dgx-1-v100x8'", 
+                "-p 'lrz-dgx-1-p100x8'", 
+                "-p 'lrz-hpe-p100x4'", 
+                "-p 'lrz-v100x2'",
+            ]
+            for p in partitions:
+                s = subprocess.check_output(f"""sinfo --Node {p} -O 'NodeHost,Gres:50,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+                if len(response_string) > 0:
+                    response_string += remove_first_line(s)
+                else:
+                    response_string += s
         else:
-            filter_cluster = f""
-        response_string = subprocess.check_output(f"""sinfo --Node {filter_cluster} -O 'NodeHost,Gres:50,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+            response_string = subprocess.check_output(f"""sinfo -O 'NodeHost,Gres:50,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=" ")
