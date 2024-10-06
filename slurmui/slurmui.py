@@ -300,7 +300,10 @@ def get_sinfo(cluster):
         host_avail_info = parse_gres_used(row[1]['GRES_USED'], host_info["#Total"])
         host_info.update(host_avail_info)
         host_info["#Avail"] = host_info['#Total'] - host_info["#Alloc"]
-        host_info['Mem (GB)'] = int(row[1]["FREE_MEM"]) // 1024
+        try:
+            host_info['Mem (GB)'] = int(row[1]["FREE_MEM"]) // 1024
+        except:
+            host_info['Mem (GB)'] = row[1]["FREE_MEM"]
 
         cpu_info = row[1]["CPUS(A/I/O/T)"].split("/")
         host_info['#CPUs Idle'] = cpu_info[1]
