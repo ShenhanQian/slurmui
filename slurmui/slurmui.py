@@ -140,7 +140,7 @@ class SlurmUI(App):
         # also change the title to include GPU information
         total_num_gpus = overview_df["#Total"].sum()
         total_available = overview_df["#Avail"].sum()
-        self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {importlib.metadata.version("slurmui")}"
+        self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {importlib.metadata.version('slurmui')}"
         return overview_df
 
 
