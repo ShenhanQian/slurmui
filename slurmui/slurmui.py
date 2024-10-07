@@ -216,13 +216,26 @@ class SlurmUI(App):
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
 
-def parse_gres_used(gres_used_str, num_total):
+def parse_gres_used(gres_used_str, num_total, cluster=None):
+    device = ""
+    alloc_str = "N/A"
     try:
-        _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
-    except:
+        if cluster == "lrz_ai":
+            try:
+                try:
+                    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+                except:
+                    _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
+            except:
+                raise ValueError(f"DEBUG: {gres_used_str}")
+        else:
+            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+        
+        num_gpus = int(num_gpus)
+    except Exception as e:
+        print(e)
         raise ValueError(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
 
-    num_gpus = int(num_gpus)
     alloc_gpus = []
     for gpu_ids in alloc_str.split(","):
         if "-" in gpu_ids:
@@ -240,17 +253,27 @@ def parse_gres_used(gres_used_str, num_total):
             "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
 
 def parse_gres(gres_str, cluster=None):
+    device = ""
     try:
         if cluster == "tum_vcg":
             _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
+        elif cluster == "lrz_ai":
+            try:
+                _, num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+            except:
+                try:
+                    _, num_gpus = re.match("(.*):(.*)", gres_str).groups()
+                except:
+                    raise ValueError(f"DEBUG: {gres_str}")
         else:
-            _,num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+            _, num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
 
         num_gpus = int(num_gpus)
-    except:
+    except Exception as e:
+        print(e)
         raise ValueError(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
-
-    return {"Device": "gpu",
+    
+    return {"Device": device,
             "#Total": num_gpus}
 
 def remove_first_line(input_string):
@@ -298,7 +321,7 @@ def get_sinfo(cluster):
 
         if not node_available:
             host_info["#Total"] = 0 
-        host_avail_info = parse_gres_used(row[1]['GRES_USED'], host_info["#Total"])
+        host_avail_info = parse_gres_used(row[1]['GRES_USED'], host_info["#Total"], cluster)
         host_info.update(host_avail_info)
         host_info["#Avail"] = host_info['#Total'] - host_info["#Alloc"]
         try:
