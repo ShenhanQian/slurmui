@@ -217,7 +217,10 @@ def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
 
 def parse_gres_used(gres_used_str, num_total):
-    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+    try:
+        _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+    except:
+        raise ValueError(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
 
     num_gpus = int(num_gpus)
     alloc_gpus = []
@@ -237,18 +240,18 @@ def parse_gres_used(gres_used_str, num_total):
             "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
 
 def parse_gres(gres_str, cluster=None):
-    if cluster == "lrz":
-        _,num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+    try:
+        if cluster == "tum_vcg":
+            _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
+        else:
+            _,num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+
         num_gpus = int(num_gpus)
-        return {"Device": "gpu",
-                "#Total": num_gpus}
-    elif cluster == "tum_vcg":
-        _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
-        num_gpus = int(num_gpus)
-        return {"Device": device,
-                "#Total": num_gpus}
-    else:
-        raise ValueError("Cluster not supported: ", cluster)
+    except:
+        raise ValueError(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
+
+    return {"Device": "gpu",
+            "#Total": num_gpus}
 
 def remove_first_line(input_string):
     lines = input_string.split('\n')
@@ -258,7 +261,7 @@ def get_sinfo(cluster):
     if DEBUG:
         response_string = SINFO_DEBUG
     else:
-        if cluster == 'lrz':
+        if cluster == 'lrz_ai':
             response_string = ""
             partitions = [
                 # "",
@@ -275,10 +278,8 @@ def get_sinfo(cluster):
                     response_string += remove_first_line(s)
                 else:
                     response_string += s
-        elif cluster == 'tum_vcg':
-            response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
         else:
-            raise ValueError("Cluster not supported: ", cluster)
+            response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
 
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
