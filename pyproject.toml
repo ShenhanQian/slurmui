@@ -1,6 +1,6 @@
 [project]
 name = "slurmui"
-version = "0.3.0.5"
+version = "1.0.0"
 description = "Terminal UI for Slurm"
 authors = [
     {name = "Norman Müller", email = "norman.mueller@tum.de"}
