@@ -136,7 +136,6 @@ class SlurmUI(App):
         if sort_column is not None:
             overview_df = overview_df.sort_values(overview_df.columns[sort_column],ascending=sort_ascending)
         
-        self.gpu_overview_df = overview_df
         # also change the title to include GPU information
         total_num_gpus = overview_df["#Total"].sum()
         total_available = overview_df["#Avail"].sum()
@@ -223,13 +222,13 @@ def parse_gres_used(gres_used_str, num_total, cluster=None):
         if cluster == "lrz_ai":
             try:
                 try:
-                    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+                    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
                 except:
                     _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
             except:
                 raise ValueError(f"DEBUG: {gres_used_str}")
         else:
-            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\(IDX:(.*)\).*", gres_used_str).groups()
+            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
         
         num_gpus = int(num_gpus)
     except Exception as e:
@@ -259,14 +258,14 @@ def parse_gres(gres_str, cluster=None):
             _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
         elif cluster == "lrz_ai":
             try:
-                _, num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+                _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
             except:
                 try:
                     _, num_gpus = re.match("(.*):(.*)", gres_str).groups()
                 except:
                     raise ValueError(f"DEBUG: {gres_str}")
         else:
-            _, num_gpus, _ = re.match("(.*):(.*)\(S:(.*)\)", gres_str).groups()
+            _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
 
         num_gpus = int(num_gpus)
     except Exception as e:
