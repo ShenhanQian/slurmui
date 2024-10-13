@@ -287,9 +287,12 @@ def get_sinfo(cluster):
         if cluster == 'lrz_ai':
             response_string = ""
             partitions = [
-                # "",
+                # "",  # only keep this line if you want to see all partitions
                 "-p 'mcml-dgx-a100-40x8'",
-                "-p 'mcml-hgx-a100-80x4'", 
+                "-p 'mcml-hgx-a100-80x4'",
+                "-p 'mcml-hgx-h100-92x4'",
+                "-p 'lrz-dgx-a100-80x8'", 
+                "-p 'lrz-hgx-h100-92x4'"
                 "-p 'lrz-dgx-1-v100x8'", 
                 "-p 'lrz-dgx-1-p100x8'", 
                 "-p 'lrz-hpe-p100x4'", 
@@ -319,11 +322,13 @@ def get_sinfo(cluster):
         else:
             continue
 
-        if not node_available:
-            host_info["#Total"] = 0 
         host_avail_info = parse_gres_used(row[1]['GRES_USED'], host_info["#Total"], cluster)
         host_info.update(host_avail_info)
-        host_info["#Avail"] = host_info['#Total'] - host_info["#Alloc"]
+        if not node_available:
+            host_info["#Avail"] = 0
+            host_info["Free IDX"] = []
+        else:
+            host_info["#Avail"] = host_info['#Total'] - host_info["#Alloc"]
         try:
             host_info['Mem (GB)'] = int(row[1]["FREE_MEM"]) // 1024
         except:
@@ -334,10 +339,11 @@ def get_sinfo(cluster):
         host_info['#CPUs Alloc'] = cpu_info[0]
         host_info['Host'] = str(row[1]["HOSTNAMES"])
         host_info['Partition'] = str(row[1]["PARTITION"])
+        host_info['State'] = str(row[1]["STATE"])
 
         overview_df.append(host_info)
     overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
-    overview_df = overview_df[['Partition', 'Host', "Device", "#Avail", "#Total", "Free IDX", "Mem (GB)", "#CPUs Idle", "#CPUs Alloc"]]
+    overview_df = overview_df[['Partition', 'Host', "Device", "State", "#Avail", "#Total", "Free IDX", "Mem (GB)", "#CPUs Idle", "#CPUs Alloc"]]
     return overview_df
 
 def get_squeue():
