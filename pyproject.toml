@@ -1,9 +1,9 @@
 [project]
 name = "slurmui"
-version = "1.0.0"
+version = "1.0.1"
 description = "Terminal UI for Slurm"
 authors = [
-    {name = "Norman Müller", email = "norman.mueller@tum.de"}
+    {name = "Shenhan Qian", email = "shenhan.qian@tum.de"}
 ]
 requires-python = ">=3.6"
 license = {text = "MIT"}

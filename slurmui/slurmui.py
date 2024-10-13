@@ -1,13 +1,10 @@
-import sys
 import io
 import importlib.metadata
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable
-from textual.widgets import Button, Header, Footer, Static, Label, RichLog, Input
-from textual.containers import Container, Vertical 
-from textual.containers import Grid
-from textual.screen import Screen
+from textual.widgets import Header, Footer, RichLog
+from textual.containers import Container
 import subprocess
 import pandas as pd
 import re
@@ -46,6 +43,7 @@ class SlurmUI(App):
         yield self.header
         yield Container(self.table, self.txt_log)
         yield self.footer
+        self.set_interval(self.interval, self.auto_refresh)
     
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
@@ -69,14 +67,22 @@ class SlurmUI(App):
             self.table.add_row(*table_row)
         self.table.focus()
 
+    def auto_refresh(self):
+        self.action_refresh()
+    
     def action_refresh(self):
         self.query_gpus()
+        self.last_cursor_coordinate  = self.table.cursor_coordinate  # memorize cursor position
+
         if self.STAGE["action"] == "monitor":
             self.update_squeue_table()
         elif self.STAGE["action"] == "log":
             self.update_log(self.STAGE["job_id"])
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table()
+        self.table.cursor_coordinate = self.last_cursor_coordinate
+        
+        self.restore_sort()
 
     def on_mount(self):
         self._minimize_text_log()
@@ -161,24 +167,35 @@ class SlurmUI(App):
             self.txt_log.write(str(e))
 
     def action_sort(self):
-        # selected_column = self.table.cursor_cell
         column_idx = self.table.cursor_column
         if column_idx != self.STAGE.get("column_idx"):
             self.STAGE["sort_ascending"] = False
         else:
-            self.STAGE["sort_ascending"] = not self.STAGE.get("sort_ascending",True)
+            self.STAGE["sort_ascending"] = not self.STAGE.get("sort_ascending", True)
         self.STAGE['column_idx'] = column_idx
         if self.STAGE["action"] == "monitor":
             self.update_squeue_table(sort_column=column_idx, sort_ascending=self.STAGE["sort_ascending"])
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table(sort_column=column_idx, sort_ascending=self.STAGE["sort_ascending"])
+        self.table.cursor_coordinate = (0, column_idx)
+        
+    def restore_sort(self):
+        if self.STAGE.get("column_idx", None) is None or self.STAGE.get("sort_ascending", None) is None:
+            return
 
-        self.table.cursor_coordinate  = (0,column_idx)
+        if self.STAGE["action"] == "monitor":
+            self.update_squeue_table(sort_column=self.STAGE["column_idx"], sort_ascending=self.STAGE["sort_ascending"])
+        elif self.STAGE["action"] == "gpu":
+            self.update_gpu_table(sort_column=self.STAGE["column_idx"], sort_ascending=self.STAGE["sort_ascending"])
+        self.table.cursor_coordinate = self.last_cursor_coordinate
 
     def update_log(self, job_id):
         if not DEBUG:
-            log_fn = get_log_fn(job_id)
-            txt_lines = read_log(log_fn)
+            try:
+                log_fn = get_log_fn(job_id)
+                txt_lines = read_log(log_fn)
+            except:
+                txt_lines = ["Log file not found"]
         else:
             txt_lines = read_log("~/ram_batch_triplane0_l1.txt")
 
@@ -380,13 +397,14 @@ def read_log(fn, num_lines=100):
     
     return txt_lines
 
-def run_ui(debug=False, cluster=None):
+def run_ui(debug=False, cluster=None, interval=10):
     if debug:
         # global for quick debugging
         global DEBUG
         DEBUG = True
     app = SlurmUI()
     app.cluster = cluster
+    app.interval = interval
     app.run()
 
 
