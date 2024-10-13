@@ -21,7 +21,7 @@ Optional arguments:
 
 `-c` cluster name.
 
-`-i` update interval in seconds, 10 by default.
+`-i` update interval in seconds, disabled by default.
 
 
 Due to the difference between slurm settings, the program can fail when parsing results from `sinfo`. Therefore, you need to specify the cluster name for special cases.

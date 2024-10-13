@@ -43,7 +43,9 @@ class SlurmUI(App):
         yield self.header
         yield Container(self.table, self.txt_log)
         yield self.footer
-        self.set_interval(self.interval, self.auto_refresh)
+
+        if self.interval > 0:
+            self.set_interval(self.interval, self.auto_refresh)
     
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
