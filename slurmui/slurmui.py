@@ -9,11 +9,21 @@ import subprocess
 import pandas as pd
 import re
 import os
+import threading
+from functools import wraps
 
 
 DEBUG = False
 if DEBUG:
     from slurmui.debug_strings import SINFO_DEBUG, SQUEUE_DEBUG
+
+
+def run_in_thread(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        thread = threading.Thread(target=func, args=args, kwargs=kwargs)
+        thread.start()
+    return wrapper
 
 
 class SlurmUI(App):
@@ -67,15 +77,13 @@ class SlurmUI(App):
         for row in squeue_df.iterrows():
             table_row = [str(x) for x in row[1].values]
             self.table.add_row(*table_row)
-        self.table.focus()
 
     def auto_refresh(self):
         self.action_refresh()
     
+    # @run_in_thread
     def action_refresh(self):
         self.query_gpus()
-        self.last_cursor_coordinate  = self.table.cursor_coordinate  # memorize cursor position
-        self.last_scroll_x, self.last_scroll_y = self.table.scroll_x, self.table.scroll_y
 
         if self.STAGE["action"] == "monitor":
             self.update_squeue_table()
@@ -83,9 +91,7 @@ class SlurmUI(App):
             self.update_log(self.STAGE["job_id"])
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table()
-        self.table.cursor_coordinate = self.last_cursor_coordinate
-        self.table.scroll_x, self.table.scroll_y = self.last_scroll_x, self.last_scroll_y
-        
+
         self.restore_sort()
 
     def on_mount(self):
@@ -194,18 +200,31 @@ class SlurmUI(App):
         self.table.cursor_coordinate = self.last_cursor_coordinate
 
     def update_log(self, job_id):
+        if not hasattr(self, 'log_positions'):
+            self.log_positions = {}
+
         if not DEBUG:
             try:
                 log_fn = get_log_fn(job_id)
-                txt_lines = read_log(log_fn)
+                if job_id not in self.log_positions:
+                    self.log_positions[job_id] = 0
+                with open(log_fn, 'r') as log_file:
+                    log_file.seek(self.log_positions[job_id])
+                    new_lines = log_file.readlines()
+                    self.log_positions[job_id] = log_file.tell()
             except:
-                txt_lines = ["Log file not found"]
+                new_lines = ["Log file not found"]
         else:
-            txt_lines = read_log("~/ram_batch_triplane0_l1.txt")
+            log_fn = "~/ram_batch_triplane0_l1.txt"
+            if job_id not in self.log_positions:
+                self.log_positions[job_id] = 0
+            with open(log_fn, 'r') as log_file:
+                log_file.seek(self.log_positions[job_id])
+                new_lines = log_file.readlines()
+                self.log_positions[job_id] = log_file.tell()
 
-        self.txt_log.clear()
-        for text_line in txt_lines:
-            self.txt_log.write(text_line)
+        for line in new_lines:
+            self.txt_log.write(line)
 
     def action_confirm(self):
         if self.STAGE["action"] == "monitor":
