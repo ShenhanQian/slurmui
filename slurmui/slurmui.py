@@ -75,6 +75,7 @@ class SlurmUI(App):
     def action_refresh(self):
         self.query_gpus()
         self.last_cursor_coordinate  = self.table.cursor_coordinate  # memorize cursor position
+        self.last_scroll_x, self.last_scroll_y = self.table.scroll_x, self.table.scroll_y
 
         if self.STAGE["action"] == "monitor":
             self.update_squeue_table()
@@ -83,6 +84,7 @@ class SlurmUI(App):
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table()
         self.table.cursor_coordinate = self.last_cursor_coordinate
+        self.table.scroll_x, self.table.scroll_y = self.last_scroll_x, self.last_scroll_y
         
         self.restore_sort()
 
