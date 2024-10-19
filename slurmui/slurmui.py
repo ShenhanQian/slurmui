@@ -11,6 +11,7 @@ import re
 import os
 import threading
 from functools import wraps
+from datetime import datetime
 
 
 DEBUG = False
@@ -28,102 +29,113 @@ def run_in_thread(func):
 
 class SlurmUI(App):
     cluster = None
+    STAGE = {"action": "monitor"}
 
     BINDINGS = [
-        Binding("d", "stage_delete", "Delete job"),
-        Binding("l", "display_log", "Log"),
         Binding("g", "display_gpu", "GPU"),
+        Binding("l", "display_log", "Log"),
+        Binding("d", "stage_delete", "Delete job"),
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sort", "Sort"),
         Binding("q", "abort_quit", "Quit"),
         Binding("enter", "confirm", "Confirm", priority=True),
         Binding("escape", "abort_quit", "Abort"),
-        # ("k", "scroll_up", "Up")    
     ]
-    STAGE = {"action": "monitor"}
-    gpu_overview_df = None
-    sqeue_df =None
 
     def compose(self) -> ComposeResult:
         self.header = Header()
         self.footer = Footer()
-        self.table = DataTable( id="table")
-        self.table.zebra_stripes = True
+        self.gpu_table = DataTable(id="gpu_table")
+        self.squeue_table = DataTable(id="squeue_table")
+        self.active_table = self.squeue_table
+        self.gpu_table.zebra_stripes = True
+        self.squeue_table.zebra_stripes = True
         self.txt_log = RichLog(wrap=True, highlight=True, id="info")
+        self.log_position = None
         yield self.header
-        yield Container(self.table, self.txt_log)
+        yield Container(self.gpu_table, self.squeue_table, self.txt_log)
         yield self.footer
 
         if self.interval > 0:
             self.set_interval(self.interval, self.auto_refresh)
-    
-    def query_squeue(self, sort_column=None, sort_ascending=True):
-        squeue_df = get_squeue() 
-        if sort_column is not None:
-            squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column],ascending=sort_ascending)
-        self.sqeue_df = squeue_df
-        return squeue_df
-
-    def update_squeue_table(self, sort_column=None, sort_ascending=True):
-        self.table.clear(columns=True)
-        squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-        # add device information
-        squeue_df["GPU_IDS"] = "N/A"
-        real_session_mask = squeue_df["PARTITION"]!="in"
-        if real_session_mask.any():
-            squeue_df["GPU_IDS"][real_session_mask] =squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
-        # self.table.columns = []
-        self.table.add_columns(*squeue_df.columns)
-        for row in squeue_df.iterrows():
-            table_row = [str(x) for x in row[1].values]
-            self.table.add_row(*table_row)
-
-    def auto_refresh(self):
-        self.action_refresh()
-    
-    # @run_in_thread
-    def action_refresh(self):
-        self.query_gpus()
-
-        if self.STAGE["action"] == "monitor":
-            self.update_squeue_table()
-        elif self.STAGE["action"] == "log":
-            self.update_log(self.STAGE["job_id"])
-        elif self.STAGE["action"] == "gpu":
-            self.update_gpu_table()
-
-        self.restore_sort()
 
     def on_mount(self):
-        self._minimize_text_log()
+        self._minimize_output_panel()
 
     def on_ready(self) -> None:
         self.update_squeue_table()
         self.query_gpus()
 
-    # def action_modal(self):
-    #     log_screen = LogScreen()
-    #     #log_screen.load_log()
-    #     self.push_screen(log_screen)
-    #     log_screen.on_ready()
+    def auto_refresh(self):
+        self.action_refresh()
+    
+    @run_in_thread
+    def action_refresh(self):
+        if self.STAGE["action"] == "monitor":
+            try:
+                self.update_squeue_table()
+            except Exception as e:
+                self.txt_log.write(str(e))
+        elif self.STAGE["action"] == "log":
+            self.update_log(self.STAGE["job_id"])
+        elif self.STAGE["action"] == "gpu":
+            try:
+                self.update_gpu_table()
+            except Exception as e:
+                raise ValueError(str(e))
+
+    def query_squeue(self, sort_column=None, sort_ascending=True):
+        squeue_df = get_squeue() 
+        if sort_column is not None:
+            squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
+        return squeue_df
+
+    def update_squeue_table(self, sort_column=None, sort_ascending=True):
+        if 'sort_column' in self.STAGE:
+            sort_column = self.STAGE['sort_column']
+        if 'sort_ascending' in self.STAGE:
+            sort_ascending = self.STAGE['sort_ascending']
+            
+        squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
+        
+        # Add device information
+        squeue_df["GPU_IDS"] = "N/A"
+        real_session_mask = squeue_df["PARTITION"] != "in"
+        if real_session_mask.any():
+            squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
+        
+        # If the table is empty, initialize it
+        if not self.squeue_table.columns:
+            self.squeue_table.add_columns(*squeue_df.columns)
+            for _, row in squeue_df.iterrows():
+                table_row = [str(row[col]) for col in squeue_df.columns]
+                self.squeue_table.add_row(*table_row)
+            return
+        
+        # Update only the cells that have changed
+        for row_index, (_, row) in enumerate(squeue_df.iterrows()):
+            table_row = [str(row[col]) for col in squeue_df.columns]
+            if row_index < len(self.squeue_table.rows):
+                for col_index, cell in enumerate(table_row):
+
+                    if self.squeue_table.get_cell_at((row_index, col_index)) != cell:
+                        self.squeue_table.update_cell_at((row_index, col_index), cell)
+            else:
+                self.squeue_table.add_row(*table_row)
+        
+        # Remove any extra rows
+        while len(self.squeue_table.rows) > len(squeue_df):
+            row_key, _ = self.squeue_table.coordinate_to_cell_key((len(self.squeue_table.rows) - 1, 0))
+            self.squeue_table.remove_row(row_key)
+        
+        self.squeue_table.focus()
 
     def _get_selected_job(self):
-        row_idx = self.table.cursor_row
-        row = self.table.get_row_at(row_idx)
+        row_idx = self.active_table.cursor_row
+        row = self.active_table.get_row_at(row_idx)
         job_id = row[0]
         job_name = row[2]
         return job_id, job_name
-
-    def _minimize_text_log(self):
-        self.table.styles.height="80%"
-        self.txt_log.styles.max_height="10%"
-        self.txt_log.can_focus = False
-        self.txt_log.styles.border = ("heavy","grey")
-    def _maximize_text_log(self):
-        self.table.styles.height="0%"
-        self.txt_log.styles.max_height="100%"
-        self.txt_log.can_focus = True
-        self.txt_log.styles.border = ("heavy","white")
 
     def action_stage_delete(self):
         if self.STAGE['action'] == "monitor":
@@ -141,11 +153,80 @@ class SlurmUI(App):
             if self.STAGE["action"] == "monitor":
                 job_id, job_name = self._get_selected_job()
                 self.STAGE = {"action": "log", "job_id": job_id, "job_name": job_name}
-                self._maximize_text_log()
+                self._maximize_output_panel()
                 self.update_log(job_id)
         except Exception as e:
             self.txt_log.clear()
             self.txt_log.write(str(e))
+
+    def update_log(self, job_id):
+        try:
+            log_fn = get_log_fn(job_id)
+            if not self.log_position:
+                self.log_position = 0
+            with open(log_fn, 'r') as log_file:
+                log_file.seek(self.log_position)
+                new_lines = log_file.readlines()
+                self.log_position = log_file.tell()
+        except Exception as e:
+            new_lines = [f"[{datetime.now()}] {str(e)}"]
+
+        for line in new_lines:
+            self.txt_log.write(line)
+
+    def _minimize_output_panel(self):
+        self.log_position = None
+        self.squeue_table.styles.height="80%"
+        self.txt_log.styles.max_height="20%"
+        self.txt_log.can_focus = False
+        self.txt_log.styles.border = ("heavy","grey")
+
+    def _maximize_output_panel(self):
+        self.squeue_table.styles.height="0%"
+        self.txt_log.styles.max_height="100%"
+        self.txt_log.can_focus = True
+        self.txt_log.styles.border = ("heavy","white")
+
+    def action_display_gpu(self):
+        self.STAGE = {"action": "gpu"}
+        try:
+            self.update_gpu_table()
+            self.switch_table_display("gpu")
+        except Exception as e:
+            self.txt_log.clear()
+            self.txt_log.write(str(e))
+
+    def update_gpu_table(self, sort_column=None, sort_ascending=True):
+        if 'sort_column' in self.STAGE:
+            sort_column = self.STAGE['sort_column']
+        if 'sort_ascending' in self.STAGE:
+            sort_ascending = self.STAGE['sort_ascending']
+
+        overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
+        
+        # If the table is empty, initialize it
+        if not self.gpu_table.columns:
+            self.gpu_table.add_columns(*overview_df.columns)
+            for _, row in overview_df.iterrows():
+                table_row = [str(row[col]) for col in overview_df.columns]
+                self.gpu_table.add_row(*table_row)
+            return
+        
+        # Update only the cells that have changed
+        for row_index, (_, row) in enumerate(overview_df.iterrows()):
+            table_row = [str(row[col]) for col in overview_df.columns]
+            if row_index < len(self.gpu_table.rows):
+                for col_index, cell in enumerate(table_row):
+                    if self.gpu_table.get_cell_at((row_index, col_index)) != cell:
+                        self.gpu_table.update_cell_at((row_index, col_index), cell)
+            else:
+                self.gpu_table.add_row(*table_row)
+        
+        # Remove any extra rows
+        while len(self.gpu_table.rows) > len(overview_df):
+            self.gpu_table.remove_row(len(self.gpu_table.rows) - 1)
+        
+        self.gpu_table.focus()
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
         overview_df = get_sinfo(self.cluster)
@@ -158,74 +239,33 @@ class SlurmUI(App):
         self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {importlib.metadata.version('slurmui')}"
         return overview_df
 
-
-    def update_gpu_table(self, sort_column=None, sort_ascending=True):
-        self.table.clear(columns=True)
-        overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.table.add_columns(*overview_df.columns)
-        for row in overview_df.iterrows():
-            table_row = [str(x) for x in row[1].values]
-            self.table.add_row(*table_row)
-        self.table.focus()
-
-    def action_display_gpu(self):
-        self.STAGE = {"action": "gpu"}
-        try:
-            self.update_gpu_table()
-        except Exception as e:
-            self.txt_log.clear()
-            self.txt_log.write(str(e))
+    def switch_table_display(self, action):
+        if action == "gpu":
+            self.gpu_table.styles.height = "100%"
+            self.squeue_table.styles.height = "0%"
+            self.active_table = self.gpu_table
+        elif action == "monitor":
+            self.gpu_table.styles.height = "0%"
+            self.squeue_table.styles.height = "80%"
+            self.active_table = self.squeue_table
+        else:
+            raise ValueError(f"Invalid action: {action}")
 
     def action_sort(self):
-        column_idx = self.table.cursor_column
-        if column_idx != self.STAGE.get("column_idx"):
+        sort_column = self.active_table.cursor_column
+        if sort_column != self.STAGE.get("sort_column"):
             self.STAGE["sort_ascending"] = False
         else:
             self.STAGE["sort_ascending"] = not self.STAGE.get("sort_ascending", True)
-        self.STAGE['column_idx'] = column_idx
+        self.STAGE['sort_column'] = sort_column
         if self.STAGE["action"] == "monitor":
-            self.update_squeue_table(sort_column=column_idx, sort_ascending=self.STAGE["sort_ascending"])
+            self.update_squeue_table()
+            self.switch_table_display("monitor")
         elif self.STAGE["action"] == "gpu":
-            self.update_gpu_table(sort_column=column_idx, sort_ascending=self.STAGE["sort_ascending"])
-        self.table.cursor_coordinate = (0, column_idx)
+            self.update_gpu_table()
+            self.switch_table_display("gpu")
+        self.active_table.cursor_coordinate = (0, sort_column)
         
-    def restore_sort(self):
-        if self.STAGE.get("column_idx", None) is None or self.STAGE.get("sort_ascending", None) is None:
-            return
-
-        if self.STAGE["action"] == "monitor":
-            self.update_squeue_table(sort_column=self.STAGE["column_idx"], sort_ascending=self.STAGE["sort_ascending"])
-        elif self.STAGE["action"] == "gpu":
-            self.update_gpu_table(sort_column=self.STAGE["column_idx"], sort_ascending=self.STAGE["sort_ascending"])
-        self.table.cursor_coordinate = self.last_cursor_coordinate
-
-    def update_log(self, job_id):
-        if not hasattr(self, 'log_positions'):
-            self.log_positions = {}
-
-        if not DEBUG:
-            try:
-                log_fn = get_log_fn(job_id)
-                if job_id not in self.log_positions:
-                    self.log_positions[job_id] = 0
-                with open(log_fn, 'r') as log_file:
-                    log_file.seek(self.log_positions[job_id])
-                    new_lines = log_file.readlines()
-                    self.log_positions[job_id] = log_file.tell()
-            except:
-                new_lines = ["Log file not found"]
-        else:
-            log_fn = "~/ram_batch_triplane0_l1.txt"
-            if job_id not in self.log_positions:
-                self.log_positions[job_id] = 0
-            with open(log_fn, 'r') as log_file:
-                log_file.seek(self.log_positions[job_id])
-                new_lines = log_file.readlines()
-                self.log_positions[job_id] = log_file.tell()
-
-        for line in new_lines:
-            self.txt_log.write(line)
-
     def action_confirm(self):
         if self.STAGE["action"] == "monitor":
             pass
@@ -238,14 +278,16 @@ class SlurmUI(App):
                 self.update_squeue_table()
                 self.STAGE["action"] = "monitor"
 
-    def action_abort(self):
+    def action_abort(self):        
         if self.STAGE["action"] == "log":
-            self._minimize_text_log()
-        elif self.STAGE["action"] == "gpu":
-            self.update_squeue_table()
-        self.txt_log.clear()
-        self.STAGE['action'] = "monitor"
+            self.txt_log.clear()
+            self._minimize_output_panel()
 
+        self.STAGE['action'] = "monitor"
+        self.update_squeue_table()
+        self.switch_table_display("monitor")
+        self.txt_log.clear()
+        
     def action_abort_quit(self):
         if self.STAGE["action"] == "monitor":
             self.exit(0)

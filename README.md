@@ -21,7 +21,7 @@ Optional arguments:
 
 `-c` cluster name.
 
-`-i` update interval in seconds, disabled by default.
+`-i` update interval in seconds, 5 by default. Set to 0 to disable.
 
 
 Due to the difference between slurm settings, the program can fail when parsing results from `sinfo`. Therefore, you need to specify the cluster name for special cases.
@@ -33,18 +33,6 @@ Due to the difference between slurm settings, the program can fail when parsing 
 | [LRZ AI](https://doku.lrz.de/lrz-ai-systems-11484278.html) | `-c lrz_ai` | Need to filter out irrelavant partitions. |
 
 For other clusters, you can first try running `slurmui` without arguments. If failed, you will need to add if-else sentences for your special cases. 
-
-## Control
-| Shortcut | Description               |
-|----------|---------------------------|
-|d | delete job (Confirm with <<Enter>>) |
-|l | display log|
-|g | display gpus |
-|r | refresh |
-|s | sort by column |
-|q / <Escape> | Abort|
-|Arrow keys | cursor up/down |
-|<Ctrl+C> | Quit |
 
 ## Troubleshooting
 - ### `AttributeError: 'NoneType' object has no attribute 'groups'`
