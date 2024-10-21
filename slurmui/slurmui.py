@@ -309,6 +309,8 @@ def parse_gres_used(gres_used_str, num_total, cluster=None):
                     _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
             except:
                 raise ValueError(f"DEBUG: {gres_used_str}")
+        elif cluster == "tum_vcg":
+            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\),.*", gres_used_str).groups()
         else:
             _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
         
