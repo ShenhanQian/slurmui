@@ -14,17 +14,13 @@ pip install git+https://github.com/ShenhanQian/slurmui.git
 ## Usage
 
 ```shell
-slurmui
+slurmui -c <cluster name>
 ```
-
 Optional arguments:
+- `-i` update interval in seconds, 5 by default. Set to 0 to disable.
 
-`-c` cluster name.
-
-`-i` update interval in seconds, 5 by default. Set to 0 to disable.
-
-
-Due to the difference between slurm settings, the program can fail when parsing results from `sinfo`. Therefore, you need to specify the cluster name for special cases.
+> [!NOTE]
+> Due to the difference between slurm settings, the program can fail when parsing results from `sinfo`. Therefore, you need to specify the cluster name for special cases.
 
 | Cluster | Argument | Comment |
 |-|-|-|
