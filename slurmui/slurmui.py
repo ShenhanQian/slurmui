@@ -50,7 +50,7 @@ class SlurmUI(App):
         self.active_table = self.squeue_table
         self.gpu_table.zebra_stripes = True
         self.squeue_table.zebra_stripes = True
-        self.txt_log = RichLog(wrap=True, highlight=True, id="info")
+        self.txt_log = RichLog(wrap=True, highlight=True, id="info", auto_scroll=False)
         self.log_position = None
         yield self.header
         yield Container(self.gpu_table, self.squeue_table, self.txt_log)
@@ -162,17 +162,31 @@ class SlurmUI(App):
     def update_log(self, job_id):
         try:
             log_fn = get_log_fn(job_id)
+            current_scroll_y = self.txt_log.scroll_offset[1]
+
             if not self.log_position:
-                self.log_position = 0
-            with open(log_fn, 'r') as log_file:
-                log_file.seek(self.log_position)
-                new_lines = log_file.readlines()
-                self.log_position = log_file.tell()
+                with open(log_fn, 'r') as f:
+                    self.log_position = sum(len(line) for line in f) - 2**16  # read the last 64KB
+                
+                with open(log_fn, 'r') as log_file:
+                    log_file.seek(self.log_position)
+                    new_lines = log_file.readlines()[1:]  # drop the first line because it can be incomplete
+                    self.log_position = log_file.tell()
+            else:
+                with open(log_fn, 'r') as log_file:
+                    log_file.seek(self.log_position)
+                    new_lines = log_file.readlines()
+                    self.log_position = log_file.tell()
         except Exception as e:
             new_lines = [f"[{datetime.now()}] {str(e)}"]
 
+        update_scroll = current_scroll_y == self.txt_log.max_scroll_y
+        
         for line in new_lines:
             self.txt_log.write(line)
+
+        if update_scroll:
+            self.txt_log.scroll_end(animate=False)
 
     def _minimize_output_panel(self):
         self.log_position = None
