@@ -178,6 +178,7 @@ class SlurmUI(App):
                     new_lines = log_file.readlines()
                     self.log_position = log_file.tell()
         except Exception as e:
+            current_scroll_y = self.txt_log.max_scroll_y
             new_lines = [f"[{datetime.now()}] {str(e)}"]
 
         update_scroll = current_scroll_y == self.txt_log.max_scroll_y
