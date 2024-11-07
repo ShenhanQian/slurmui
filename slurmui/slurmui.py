@@ -166,7 +166,7 @@ class SlurmUI(App):
 
             if not self.log_position:
                 with open(log_fn, 'r') as f:
-                    self.log_position = sum(len(line) for line in f) - 2**16  # read the last 64KB
+                    self.log_position = max(sum(len(line) for line in f) - 2**16, 0)  # read the last 64KB
                 
                 with open(log_fn, 'r') as log_file:
                     log_file.seek(self.log_position)
