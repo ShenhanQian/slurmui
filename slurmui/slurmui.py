@@ -29,7 +29,11 @@ def run_in_thread(func):
 
 class SlurmUI(App):
     cluster = None
-    STAGE = {"action": "monitor"}
+    STAGE = {
+        "action": "monitor",
+        "monitor": {},
+        "gpu": {},
+    }
 
     BINDINGS = [
         Binding("g", "display_gpu", "GPU"),
@@ -63,8 +67,10 @@ class SlurmUI(App):
         self._minimize_output_panel()
 
     def on_ready(self) -> None:
-        self.update_squeue_table()
         self.query_gpus()
+        self.init_gpu_table()
+        self.switch_table_display("monitor")
+        self.init_squeue_table()
 
     def auto_refresh(self):
         self.action_refresh()
@@ -90,19 +96,43 @@ class SlurmUI(App):
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
         return squeue_df
 
+    @run_in_thread
+    def init_squeue_table(self, sort_column=None, sort_ascending=True):
+        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
+            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
+        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
+            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
+
+        squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
+
+        # Add device information
+        # squeue_df["GPU_IDS"] = "N/A"
+        # real_session_mask = squeue_df["PARTITION"] != "in"
+        # if real_session_mask.any():
+        #     squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
+
+        self.squeue_table.clear()
+        self.squeue_table.add_columns(*squeue_df.columns)
+        for _, row in squeue_df.iterrows():
+            table_row = [str(row[col]) for col in squeue_df.columns]
+            self.squeue_table.add_row(*table_row)
+        
+        self.squeue_table.focus()
+
+    @run_in_thread
     def update_squeue_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE:
-            sort_column = self.STAGE['sort_column']
-        if 'sort_ascending' in self.STAGE:
-            sort_ascending = self.STAGE['sort_ascending']
+        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
+            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
+        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
+            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
             
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
         
         # Add device information
-        squeue_df["GPU_IDS"] = "N/A"
-        real_session_mask = squeue_df["PARTITION"] != "in"
-        if real_session_mask.any():
-            squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
+        # squeue_df["GPU_IDS"] = "N/A"
+        # real_session_mask = squeue_df["PARTITION"] != "in"
+        # if real_session_mask.any():
+        #     squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
         
         # If the table is empty, initialize it
         if not self.squeue_table.columns:
@@ -143,7 +173,7 @@ class SlurmUI(App):
                 job_id, job_name = self._get_selected_job()
                 self.txt_log.clear()
                 self.txt_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
-                self.STAGE = {"action": "delete", "job_id": job_id, "job_name": job_name}
+                self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
             except Exception as e:
                 self.txt_log.clear()
                 self.txt_log.write(str(e))
@@ -152,7 +182,7 @@ class SlurmUI(App):
         try:
             if self.STAGE["action"] == "monitor":
                 job_id, job_name = self._get_selected_job()
-                self.STAGE = {"action": "log", "job_id": job_id, "job_name": job_name}
+                self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
                 self._maximize_output_panel()
                 self.update_log(job_id)
         except Exception as e:
@@ -203,7 +233,7 @@ class SlurmUI(App):
         self.txt_log.styles.border = ("heavy","white")
 
     def action_display_gpu(self):
-        self.STAGE = {"action": "gpu"}
+        self.STAGE.update({"action": "gpu"})
         try:
             self.update_gpu_table()
             self.switch_table_display("gpu")
@@ -211,11 +241,29 @@ class SlurmUI(App):
             self.txt_log.clear()
             self.txt_log.write(str(e))
 
+    @run_in_thread
+    def init_gpu_table(self, sort_column=None, sort_ascending=True):
+        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
+            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
+        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
+            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
+
+        overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
+
+        self.gpu_table.clear()
+        self.gpu_table.add_columns(*overview_df.columns)
+        for _, row in overview_df.iterrows():
+            table_row = [str(row[col]) for col in overview_df.columns]
+            self.gpu_table.add_row(*table_row)
+
+        self.gpu_table.focus()
+    
+    @run_in_thread
     def update_gpu_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE:
-            sort_column = self.STAGE['sort_column']
-        if 'sort_ascending' in self.STAGE:
-            sort_ascending = self.STAGE['sort_ascending']
+        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
+            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
+        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
+            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
         
@@ -268,11 +316,11 @@ class SlurmUI(App):
 
     def action_sort(self):
         sort_column = self.active_table.cursor_column
-        if sort_column != self.STAGE.get("sort_column"):
-            self.STAGE["sort_ascending"] = False
+        if sort_column != self.STAGE[self.STAGE["action"]].get("sort_column"):
+            self.STAGE[self.STAGE["action"]]["sort_ascending"] = False
         else:
-            self.STAGE["sort_ascending"] = not self.STAGE.get("sort_ascending", True)
-        self.STAGE['sort_column'] = sort_column
+            self.STAGE[self.STAGE["action"]]["sort_ascending"] = not self.STAGE[self.STAGE["action"]].get("sort_ascending", True)
+        self.STAGE[self.STAGE["action"]]['sort_column'] = sort_column
         if self.STAGE["action"] == "monitor":
             self.update_squeue_table()
             self.switch_table_display("monitor")
@@ -293,9 +341,8 @@ class SlurmUI(App):
                 self.update_squeue_table()
                 self.STAGE["action"] = "monitor"
 
-    def action_abort(self):        
+    def action_abort(self):
         if self.STAGE["action"] == "log":
-            self.txt_log.clear()
             self._minimize_output_panel()
 
         self.STAGE['action'] = "monitor"
