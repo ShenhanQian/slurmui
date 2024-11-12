@@ -529,7 +529,7 @@ def get_squeue():
     df["GPU_IDS"] = "N/A"
     mask = (df["PARTITION"] != "in") & (df["STATE"] == "RUNNING")
     if mask.any():
-        df["GPU_IDS"][mask] = df[mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
+        df.loc[mask, "GPU_IDS"] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gpu_ids(x))
     return df 
 
 def get_job_gpu_ids(job_id):
