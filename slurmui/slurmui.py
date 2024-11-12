@@ -41,26 +41,16 @@ class SlurmUI(App):
     stats = {}
 
     BINDINGS = [
-        Binding("g", "display_gpu", "GPU"),
-        Binding("l", "display_log", "Log"),
-        Binding("d", "stage_delete", "Delete job"),
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sort", "Sort"),
         Binding("i", "copy_jobid", "Copy JobID"),
+        Binding("d", "stage_delete", "Delete job"),
+        Binding("Enter", "confirm", "Confirm", priority=True),
         Binding("q", "abort_quit", "Quit"),
-        Binding("enter", "confirm", "Confirm", priority=True),
-        Binding("escape", "abort_quit", "Abort"),
+        Binding("g", "display_gpu", "GPU"),
+        Binding("l", "display_log", "Log"),
+        Binding("L", "copy_log_path", "Copy Log Path"),
     ]
-
-    def action_copy_jobid(self):
-        job_id, _ = self._get_selected_job()
-        
-        pyperclip.copy(job_id)  # Copies text to clipboard
-        clipboard_text = pyperclip.paste()
-        if clipboard_text == job_id:
-            self.txt_log.write(f"Copied {clipboard_text} to clipboard")
-        else:
-            self.txt_log.write(f"Error copying JOBID to clipboard.")
 
     def compose(self) -> ComposeResult:
         self.header = Header()
@@ -106,6 +96,100 @@ class SlurmUI(App):
                 raise ValueError(str(e))
         self.update_title()
     
+    def action_sort(self):
+        sort_column = self.active_table.cursor_column
+        if sort_column != self.STAGE[self.STAGE["action"]].get("sort_column"):
+            self.STAGE[self.STAGE["action"]]["sort_ascending"] = False
+        else:
+            self.STAGE[self.STAGE["action"]]["sort_ascending"] = not self.STAGE[self.STAGE["action"]].get("sort_ascending", True)
+        self.STAGE[self.STAGE["action"]]['sort_column'] = sort_column
+        if self.STAGE["action"] == "monitor":
+            self.update_squeue_table()
+            self.switch_table_display("monitor")
+        elif self.STAGE["action"] == "gpu":
+            self.update_gpu_table()
+            self.switch_table_display("gpu")
+        self.active_table.cursor_coordinate = (0, sort_column)
+    
+    def action_copy_jobid(self):
+        job_id, _ = self._get_selected_job()
+        
+        pyperclip.copy(job_id)  # Copies text to clipboard
+        clipboard_text = pyperclip.paste()
+        if clipboard_text == job_id:
+            self.txt_log.write(f"Copied {clipboard_text} to clipboard")
+        else:
+            self.txt_log.write(f"Error copying JOBID to clipboard.")
+    
+    def action_stage_delete(self):
+        if self.STAGE['action'] == "monitor":
+            try:
+                job_id, job_name = self._get_selected_job()
+                self.txt_log.clear()
+                self.txt_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
+                self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
+            except Exception as e:
+                self.txt_log.clear()
+                self.txt_log.write(str(e))
+        
+    def action_confirm(self):
+        if self.STAGE["action"] == "monitor":
+            pass
+        else:
+            self.txt_log.clear()
+            # job to delete
+            if self.STAGE["action"] == "delete":
+                perform_scancel(self.STAGE['job_id'])
+                self.txt_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
+                self.update_squeue_table()
+                self.STAGE["action"] = "monitor"
+
+    def action_abort_quit(self):
+        if self.STAGE["action"] == "monitor":
+            self.exit(0)
+        else:
+            self.action_abort()
+
+    def action_abort(self):
+        if self.STAGE["action"] == "log":
+            self._minimize_output_panel()
+
+        self.STAGE['action'] = "monitor"
+        self.update_squeue_table()
+        self.switch_table_display("monitor")
+        self.txt_log.clear()
+    
+    def action_display_gpu(self):
+        self.STAGE.update({"action": "gpu"})
+        try:
+            self.update_gpu_table()
+            self.switch_table_display("gpu")
+        except Exception as e:
+            self.txt_log.clear()
+            self.txt_log.write(str(e))
+
+    def action_display_log(self):
+        try:
+            if self.STAGE["action"] == "monitor":
+                job_id, job_name = self._get_selected_job()
+                self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
+                self._maximize_output_panel()
+                self.update_log(job_id)
+        except Exception as e:
+            self.txt_log.clear()
+            self.txt_log.write(str(e))
+
+    def action_copy_log_path(self):
+        job_id, _ = self._get_selected_job()
+        log_fn = get_log_fn(job_id)
+        pyperclip.copy(log_fn)
+        clipboard_text = pyperclip.paste()
+        self.txt_log.clear()
+        if clipboard_text == log_fn:
+            self.txt_log.write(f"{clipboard_text} (copied to clipboard)")
+        else:
+            self.txt_log.write(f"{log_fn} (failed to copy to clipboard)")
+
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
         ngpus = self.stats.get("ngpus", 0)
@@ -184,28 +268,6 @@ class SlurmUI(App):
         job_name = row[2]
         return job_id, job_name
 
-    def action_stage_delete(self):
-        if self.STAGE['action'] == "monitor":
-            try:
-                job_id, job_name = self._get_selected_job()
-                self.txt_log.clear()
-                self.txt_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
-                self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
-            except Exception as e:
-                self.txt_log.clear()
-                self.txt_log.write(str(e))
-
-    def action_display_log(self):
-        try:
-            if self.STAGE["action"] == "monitor":
-                job_id, job_name = self._get_selected_job()
-                self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
-                self._maximize_output_panel()
-                self.update_log(job_id)
-        except Exception as e:
-            self.txt_log.clear()
-            self.txt_log.write(str(e))
-
     def update_log(self, job_id):
         try:
             log_fn = get_log_fn(job_id)
@@ -248,15 +310,6 @@ class SlurmUI(App):
         self.txt_log.styles.max_height="100%"
         self.txt_log.can_focus = True
         self.txt_log.styles.border = ("heavy","white")
-
-    def action_display_gpu(self):
-        self.STAGE.update({"action": "gpu"})
-        try:
-            self.update_gpu_table()
-            self.switch_table_display("gpu")
-        except Exception as e:
-            self.txt_log.clear()
-            self.txt_log.write(str(e))
 
     @run_in_thread
     def init_gpu_table(self, sort_column=None, sort_ascending=True):
@@ -330,48 +383,6 @@ class SlurmUI(App):
             self.active_table = self.squeue_table
         else:
             raise ValueError(f"Invalid action: {action}")
-
-    def action_sort(self):
-        sort_column = self.active_table.cursor_column
-        if sort_column != self.STAGE[self.STAGE["action"]].get("sort_column"):
-            self.STAGE[self.STAGE["action"]]["sort_ascending"] = False
-        else:
-            self.STAGE[self.STAGE["action"]]["sort_ascending"] = not self.STAGE[self.STAGE["action"]].get("sort_ascending", True)
-        self.STAGE[self.STAGE["action"]]['sort_column'] = sort_column
-        if self.STAGE["action"] == "monitor":
-            self.update_squeue_table()
-            self.switch_table_display("monitor")
-        elif self.STAGE["action"] == "gpu":
-            self.update_gpu_table()
-            self.switch_table_display("gpu")
-        self.active_table.cursor_coordinate = (0, sort_column)
-        
-    def action_confirm(self):
-        if self.STAGE["action"] == "monitor":
-            pass
-        else:
-            self.txt_log.clear()
-            # job to delete
-            if self.STAGE["action"] == "delete":
-                perform_scancel(self.STAGE['job_id'])
-                self.txt_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
-                self.update_squeue_table()
-                self.STAGE["action"] = "monitor"
-
-    def action_abort(self):
-        if self.STAGE["action"] == "log":
-            self._minimize_output_panel()
-
-        self.STAGE['action'] = "monitor"
-        self.update_squeue_table()
-        self.switch_table_display("monitor")
-        self.txt_log.clear()
-        
-    def action_abort_quit(self):
-        if self.STAGE["action"] == "monitor":
-            self.exit(0)
-        else:
-            self.action_abort()
 
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
