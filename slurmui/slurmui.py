@@ -34,6 +34,7 @@ class SlurmUI(App):
         "monitor": {},
         "gpu": {},
     }
+    stats = {}
 
     BINDINGS = [
         Binding("g", "display_gpu", "GPU"),
@@ -67,7 +68,6 @@ class SlurmUI(App):
         self._minimize_output_panel()
 
     def on_ready(self) -> None:
-        self.query_gpus()
         self.init_gpu_table()
         self.switch_table_display("monitor")
         self.init_squeue_table()
@@ -89,11 +89,23 @@ class SlurmUI(App):
                 self.update_gpu_table()
             except Exception as e:
                 raise ValueError(str(e))
+        self.update_title()
+    
+    def update_title(self):
+        ngpus_avail = self.stats.get("ngpus_avail", 0)
+        ngpus = self.stats.get("ngpus", 0)
+        njobs = self.stats.get("njobs", 0)
+        njobs_running = self.stats.get("njobs_running", 0)
+
+        self.title = f"SlurmUI (v{importlib.metadata.version('slurmui')}) \t[Jobs: {njobs_running}/{njobs} | GPUs: {ngpus_avail}/{ngpus}]"
 
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
+
+        self.stats['njobs'] = len(squeue_df)
+        self.stats['njobs_running'] = sum(1 for row in squeue_df.iterrows() if row[1]['STATE'].strip() == 'RUNNING')
         return squeue_df
 
     @run_in_thread
@@ -117,6 +129,7 @@ class SlurmUI(App):
             table_row = [str(row[col]) for col in squeue_df.columns]
             self.squeue_table.add_row(*table_row)
         
+        self.update_title()
         self.squeue_table.focus()
 
     @run_in_thread
@@ -158,6 +171,7 @@ class SlurmUI(App):
             row_key, _ = self.squeue_table.coordinate_to_cell_key((len(self.squeue_table.rows) - 1, 0))
             self.squeue_table.remove_row(row_key)
         
+        self.update_title()
         self.squeue_table.focus()
 
     def _get_selected_job(self):
@@ -257,6 +271,7 @@ class SlurmUI(App):
             self.gpu_table.add_row(*table_row)
 
         self.gpu_table.focus()
+        self.update_title()
     
     @run_in_thread
     def update_gpu_table(self, sort_column=None, sort_ascending=True):
@@ -289,6 +304,7 @@ class SlurmUI(App):
         while len(self.gpu_table.rows) > len(overview_df):
             self.gpu_table.remove_row(len(self.gpu_table.rows) - 1)
         
+        self.update_title()
         self.gpu_table.focus()
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
@@ -296,10 +312,8 @@ class SlurmUI(App):
         if sort_column is not None:
             overview_df = overview_df.sort_values(overview_df.columns[sort_column],ascending=sort_ascending)
         
-        # also change the title to include GPU information
-        total_num_gpus = overview_df["#Total"].sum()
-        total_available = overview_df["#Avail"].sum()
-        self.title = f"SlurmUI --- GPU STATS: {total_available}/{total_num_gpus} -- Version: {importlib.metadata.version('slurmui')}"
+        self.stats['ngpus'] = overview_df["#Total"].sum()
+        self.stats['ngpus_avail'] = overview_df["#Avail"].sum()
         return overview_df
 
     def switch_table_display(self, action):
