@@ -12,6 +12,7 @@ import os
 import threading
 from functools import wraps
 from datetime import datetime
+import pyperclip
 
 
 DEBUG = False
@@ -45,10 +46,21 @@ class SlurmUI(App):
         Binding("d", "stage_delete", "Delete job"),
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sort", "Sort"),
+        Binding("i", "copy_jobid", "Copy JobID"),
         Binding("q", "abort_quit", "Quit"),
         Binding("enter", "confirm", "Confirm", priority=True),
         Binding("escape", "abort_quit", "Abort"),
     ]
+
+    def action_copy_jobid(self):
+        job_id, _ = self._get_selected_job()
+        
+        pyperclip.copy(job_id)  # Copies text to clipboard
+        clipboard_text = pyperclip.paste()
+        if clipboard_text == job_id:
+            self.txt_log.write(f"Copied {clipboard_text} to clipboard")
+        else:
+            self.txt_log.write(f"Error copying JOBID to clipboard.")
 
     def compose(self) -> ComposeResult:
         self.header = Header()
