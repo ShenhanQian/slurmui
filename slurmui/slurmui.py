@@ -31,7 +31,10 @@ class SlurmUI(App):
     cluster = None
     STAGE = {
         "action": "monitor",
-        "monitor": {},
+        "monitor": {
+            "sort_column": 0,
+            "sort_ascending": True
+        },
         "gpu": {},
     }
     stats = {}
@@ -105,7 +108,7 @@ class SlurmUI(App):
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
 
         self.stats['njobs'] = len(squeue_df)
-        self.stats['njobs_running'] = sum(1 for row in squeue_df.iterrows() if row[1]['STATE'].strip() == 'RUNNING')
+        self.stats['njobs_running'] = sum(1 for row in squeue_df.iterrows() if row[1]['STATE'] == 'RUNNING')
         return squeue_df
 
     @run_in_thread
@@ -116,12 +119,6 @@ class SlurmUI(App):
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-
-        # Add device information
-        # squeue_df["GPU_IDS"] = "N/A"
-        # real_session_mask = squeue_df["PARTITION"] != "in"
-        # if real_session_mask.any():
-        #     squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
 
         self.squeue_table.clear()
         self.squeue_table.add_columns(*squeue_df.columns)
@@ -140,12 +137,6 @@ class SlurmUI(App):
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
             
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-        
-        # Add device information
-        # squeue_df["GPU_IDS"] = "N/A"
-        # real_session_mask = squeue_df["PARTITION"] != "in"
-        # if real_session_mask.any():
-        #     squeue_df["GPU_IDS"][real_session_mask] = squeue_df[real_session_mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
         
         # If the table is empty, initialize it
         if not self.squeue_table.columns:
@@ -514,15 +505,23 @@ def get_squeue():
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=sep)
-    df.columns = [x.strip() for x in df.columns]
+
+    # Strip whitespace from column names
+    df.columns = df.columns.str.strip()
+
+    # Strip whitespace from each string element in the DataFrame
+    for col in df.select_dtypes(['object']).columns:
+        df[col] = df[col].str.strip()
+    
+    # Add allocated GPU IDs
+    df["GPU_IDS"] = "N/A"
+    mask = (df["PARTITION"] != "in") & (df["STATE"] == "RUNNING")
+    if mask.any():
+        df["GPU_IDS"][mask] = df[mask]["JOBID"].apply(lambda x: get_job_gpu_ids(x))
     return df 
 
 def get_job_gpu_ids(job_id):
     try:
-        # response_string = subprocess.check_output(f"""srun --jobid {job_id} '/bin/env' | grep SLURM_STEP_GPUS""", shell=True,stderr=subprocess.STDOUT, timeout=0.3).decode("utf-8")
-        # response_string = subprocess.check_output(f"""scontrol --dd show job {job_id} | grep GRES=gpu:""", shell=True).decode("utf-8")
-        # gpu_ids = re.match(response_string, ".*GRES=gpu:.*\(IDX:(.*)\)").groups()[0]
-        # formatted_string = gpu_ids # response_string.split("=")[-1].strip()
         response_string = subprocess.check_output(f"""scontrol show jobid -dd {job_id} | grep GRES""", shell=True).decode("utf-8")
         formatted_string = response_string.split(":")[-1].strip()[:-1]
     except:
