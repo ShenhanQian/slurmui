@@ -41,11 +41,11 @@ class SlurmUI(App):
     stats = {}
 
     BINDINGS = [
+        Binding("enter", "confirm", "Confirm", priority=True),
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sort", "Sort"),
         Binding("i", "copy_jobid", "Copy JobID"),
         Binding("d", "stage_delete", "Delete job"),
-        Binding("Enter", "confirm", "Confirm", priority=True),
         Binding("q", "abort_quit", "Quit"),
         Binding("g", "display_gpu", "GPU"),
         Binding("l", "display_log", "Log"),
@@ -113,35 +113,36 @@ class SlurmUI(App):
         self.active_table.cursor_coordinate = (0, sort_column)
     
     def action_copy_jobid(self):
-        job_id, _ = self._get_selected_job()
-        
-        pyperclip.copy(job_id)  # Copies text to clipboard
-        clipboard_text = pyperclip.paste()
-        if clipboard_text == job_id:
-            self.info_log.write(f"Copied {clipboard_text} to clipboard")
-        else:
-            self.info_log.write(f"Error copying JOBID to clipboard.")
+        if self.STAGE["action"] == "monitor":
+            job_id, _ = self._get_selected_job()
+            
+            pyperclip.copy(job_id)  # Copies text to clipboard
+            clipboard_text = pyperclip.paste()
+            if clipboard_text == job_id:
+                self.info_log.write(f"JOBID: {clipboard_text} (copied to clipboard)")
+            else:
+                self.info_log.write(f"JOBID: {job_id} failed to copy to clipboard")
     
     def action_stage_delete(self):
         if self.STAGE['action'] == "monitor":
             try:
                 job_id, job_name = self._get_selected_job()
-                self.info_log.clear()
-                self.info_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
+                # self.info_log.clear()
+                self.info_log.write(f"Delete: {job_id}? press <<ENTER>> to confirm")
                 self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
             except Exception as e:
-                self.info_log.clear()
+                # self.info_log.clear()
                 self.info_log.write(str(e))
         
     def action_confirm(self):
         if self.STAGE["action"] == "monitor":
             pass
         else:
-            self.info_log.clear()
+            # self.info_log.clear()
             # job to delete
             if self.STAGE["action"] == "delete":
                 perform_scancel(self.STAGE['job_id'])
-                self.info_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
+                self.info_log.write(f"Delete: {self.STAGE['job_id']}? succeeded")
                 self.update_squeue_table()
                 self.STAGE["action"] = "monitor"
 
@@ -152,13 +153,16 @@ class SlurmUI(App):
             self.action_abort()
 
     def action_abort(self):
-        if self.STAGE["action"] == "log":
-            self._minimize_joblog_panel()
+        if self.STAGE["action"] == "delete":
+            self.info_log.write("Delete: aborted")
+        else:
+            if self.STAGE["action"] == "log":
+                self._minimize_joblog_panel()
 
         self.STAGE['action'] = "monitor"
         self.update_squeue_table()
         self.switch_table_display("monitor")
-        self.info_log.clear()
+        # self.info_log.clear()
     
     def action_display_gpu(self):
         self.STAGE.update({"action": "gpu"})
@@ -166,7 +170,7 @@ class SlurmUI(App):
             self.update_gpu_table()
             self.switch_table_display("gpu")
         except Exception as e:
-            self.info_log.clear()
+            # self.info_log.clear()
             self.info_log.write(str(e))
 
     def action_display_log(self):
@@ -177,18 +181,19 @@ class SlurmUI(App):
                 self._maximize_joblog_panel()
                 self.update_log(job_id)
         except Exception as e:
-            self.info_log.clear()
+            # self.info_log.clear()
             self.info_log.write(str(e))
 
     def action_copy_log_path(self):
-        job_id, _ = self._get_selected_job()
-        log_fn = get_log_fn(job_id)
-        pyperclip.copy(log_fn)
-        clipboard_text = pyperclip.paste()
-        if clipboard_text == log_fn:
-            self.info_log.write(f"{clipboard_text} (copied to clipboard)")
-        else:
-            self.info_log.write(f"{log_fn} (failed to copy to clipboard)")
+        if self.STAGE["action"] == "monitor":
+            job_id, _ = self._get_selected_job()
+            log_fn = get_log_fn(job_id)
+            pyperclip.copy(log_fn)
+            clipboard_text = pyperclip.paste()
+            if clipboard_text == log_fn:
+                self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
+            else:
+                self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
 
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
@@ -308,6 +313,7 @@ class SlurmUI(App):
         self.job_log.styles.max_height="0%"
         self.job_log.styles.border = ("none","grey")
         self.job_log_position = None
+        self.job_log.clear()
 
     def _maximize_joblog_panel(self):
         self.squeue_table.styles.height="0%"
