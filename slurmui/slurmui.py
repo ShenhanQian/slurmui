@@ -60,17 +60,18 @@ class SlurmUI(App):
         self.active_table = self.squeue_table
         self.gpu_table.zebra_stripes = True
         self.squeue_table.zebra_stripes = True
-        self.txt_log = RichLog(wrap=True, highlight=True, id="info", auto_scroll=False)
-        self.log_position = None
+        self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
+        self.job_log = RichLog(wrap=True, highlight=True, id="job_log", auto_scroll=False)
+        self.job_log_position = None
         yield self.header
-        yield Container(self.gpu_table, self.squeue_table, self.txt_log)
+        yield Container(self.gpu_table, self.squeue_table, self.info_log, self.job_log)
         yield self.footer
 
         if self.interval > 0:
             self.set_interval(self.interval, self.auto_refresh)
 
     def on_mount(self):
-        self._minimize_output_panel()
+        self._minimize_joblog_panel()
 
     def on_ready(self) -> None:
         self.init_gpu_table()
@@ -86,7 +87,7 @@ class SlurmUI(App):
             try:
                 self.update_squeue_table()
             except Exception as e:
-                self.txt_log.write(str(e))
+                self.info_log.write(str(e))
         elif self.STAGE["action"] == "log":
             self.update_log(self.STAGE["job_id"])
         elif self.STAGE["action"] == "gpu":
@@ -117,30 +118,30 @@ class SlurmUI(App):
         pyperclip.copy(job_id)  # Copies text to clipboard
         clipboard_text = pyperclip.paste()
         if clipboard_text == job_id:
-            self.txt_log.write(f"Copied {clipboard_text} to clipboard")
+            self.info_log.write(f"Copied {clipboard_text} to clipboard")
         else:
-            self.txt_log.write(f"Error copying JOBID to clipboard.")
+            self.info_log.write(f"Error copying JOBID to clipboard.")
     
     def action_stage_delete(self):
         if self.STAGE['action'] == "monitor":
             try:
                 job_id, job_name = self._get_selected_job()
-                self.txt_log.clear()
-                self.txt_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
+                self.info_log.clear()
+                self.info_log.write(f"Delete: {job_id} - {job_name}? Press <<ENTER>> to confirm")
                 self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
             except Exception as e:
-                self.txt_log.clear()
-                self.txt_log.write(str(e))
+                self.info_log.clear()
+                self.info_log.write(str(e))
         
     def action_confirm(self):
         if self.STAGE["action"] == "monitor":
             pass
         else:
-            self.txt_log.clear()
+            self.info_log.clear()
             # job to delete
             if self.STAGE["action"] == "delete":
                 perform_scancel(self.STAGE['job_id'])
-                self.txt_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
+                self.info_log.write(f"{self.STAGE['job_id']} - {self.STAGE['job_name']} deleted")
                 self.update_squeue_table()
                 self.STAGE["action"] = "monitor"
 
@@ -152,12 +153,12 @@ class SlurmUI(App):
 
     def action_abort(self):
         if self.STAGE["action"] == "log":
-            self._minimize_output_panel()
+            self._minimize_joblog_panel()
 
         self.STAGE['action'] = "monitor"
         self.update_squeue_table()
         self.switch_table_display("monitor")
-        self.txt_log.clear()
+        self.info_log.clear()
     
     def action_display_gpu(self):
         self.STAGE.update({"action": "gpu"})
@@ -165,30 +166,29 @@ class SlurmUI(App):
             self.update_gpu_table()
             self.switch_table_display("gpu")
         except Exception as e:
-            self.txt_log.clear()
-            self.txt_log.write(str(e))
+            self.info_log.clear()
+            self.info_log.write(str(e))
 
     def action_display_log(self):
         try:
             if self.STAGE["action"] == "monitor":
                 job_id, job_name = self._get_selected_job()
                 self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
-                self._maximize_output_panel()
+                self._maximize_joblog_panel()
                 self.update_log(job_id)
         except Exception as e:
-            self.txt_log.clear()
-            self.txt_log.write(str(e))
+            self.info_log.clear()
+            self.info_log.write(str(e))
 
     def action_copy_log_path(self):
         job_id, _ = self._get_selected_job()
         log_fn = get_log_fn(job_id)
         pyperclip.copy(log_fn)
         clipboard_text = pyperclip.paste()
-        self.txt_log.clear()
         if clipboard_text == log_fn:
-            self.txt_log.write(f"{clipboard_text} (copied to clipboard)")
+            self.info_log.write(f"{clipboard_text} (copied to clipboard)")
         else:
-            self.txt_log.write(f"{log_fn} (failed to copy to clipboard)")
+            self.info_log.write(f"{log_fn} (failed to copy to clipboard)")
 
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
@@ -271,45 +271,53 @@ class SlurmUI(App):
     def update_log(self, job_id):
         try:
             log_fn = get_log_fn(job_id)
-            current_scroll_y = self.txt_log.scroll_offset[1]
+            current_scroll_y = self.job_log.scroll_offset[1]
 
-            if not self.log_position:
+            if not self.job_log_position:
                 with open(log_fn, 'r') as f:
-                    self.log_position = max(sum(len(line) for line in f) - 2**16, 0)  # read the last 64KB
+                    self.job_log_position = max(sum(len(line) for line in f) - 2**16, 0)  # read the last 64KB
                 
                 with open(log_fn, 'r') as log_file:
-                    log_file.seek(self.log_position)
+                    log_file.seek(self.job_log_position)
                     new_lines = log_file.readlines()[1:]  # drop the first line because it can be incomplete
-                    self.log_position = log_file.tell()
+                    self.job_log_position = log_file.tell()
             else:
                 with open(log_fn, 'r') as log_file:
-                    log_file.seek(self.log_position)
+                    log_file.seek(self.job_log_position)
                     new_lines = log_file.readlines()
-                    self.log_position = log_file.tell()
+                    self.job_log_position = log_file.tell()
         except Exception as e:
-            current_scroll_y = self.txt_log.max_scroll_y
+            current_scroll_y = self.job_log.max_scroll_y
             new_lines = [f"[{datetime.now()}] {str(e)}"]
 
-        update_scroll = current_scroll_y == self.txt_log.max_scroll_y
+        update_scroll = current_scroll_y == self.job_log.max_scroll_y
         
         for line in new_lines:
-            self.txt_log.write(line)
+            self.job_log.write(line)
 
         if update_scroll:
-            self.txt_log.scroll_end(animate=False)
+            self.job_log.scroll_end(animate=False)
 
-    def _minimize_output_panel(self):
-        self.log_position = None
+    def _minimize_joblog_panel(self):
         self.squeue_table.styles.height="80%"
-        self.txt_log.styles.max_height="20%"
-        self.txt_log.can_focus = False
-        self.txt_log.styles.border = ("heavy","grey")
+        
+        self.info_log.styles.max_height="20%"
+        self.info_log.can_focus = False
+        self.info_log.styles.border = ("heavy","grey")
 
-    def _maximize_output_panel(self):
+        self.job_log.styles.max_height="0%"
+        self.job_log.styles.border = ("none","grey")
+        self.job_log_position = None
+
+    def _maximize_joblog_panel(self):
         self.squeue_table.styles.height="0%"
-        self.txt_log.styles.max_height="100%"
-        self.txt_log.can_focus = True
-        self.txt_log.styles.border = ("heavy","white")
+        
+        self.info_log.styles.max_height="0%"
+        self.info_log.can_focus = True
+        self.info_log.styles.border = ("none","grey")
+        
+        self.job_log.styles.max_height="100%"
+        self.job_log.styles.border = ("heavy","grey")
 
     @run_in_thread
     def init_gpu_table(self, sort_column=None, sort_ascending=True):
