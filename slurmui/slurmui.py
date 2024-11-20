@@ -31,8 +31,8 @@ def run_in_thread(func):
 class SlurmUI(App):
     cluster = None
     STAGE = {
-        "action": "monitor",
-        "monitor": {
+        "action": "job",
+        "job": {
             "sort_column": 0,
             "sort_ascending": True
         },
@@ -75,7 +75,7 @@ class SlurmUI(App):
 
     def on_ready(self) -> None:
         self.init_gpu_table()
-        self.switch_table_display("monitor")
+        self.switch_table_display("job")
         self.init_squeue_table()
     
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  
@@ -83,15 +83,15 @@ class SlurmUI(App):
         # self.info_log.write(f"Action: {action}")
         if action == "sort" and self.STAGE['action'] == 'log':
             return False
-        elif action == "copy_jobid" and self.STAGE['action'] != 'monitor':
+        elif action == "copy_jobid" and self.STAGE['action'] != 'job':
             return False
-        elif action == "delete" and self.STAGE['action'] != 'monitor':
+        elif action == "delete" and self.STAGE['action'] != 'job':
             return False
-        elif action == "display_gpu" and self.STAGE['action'] != 'monitor':
+        elif action == "display_gpu" and self.STAGE['action'] != 'job':
             return False
-        elif action == "display_log" and self.STAGE['action'] != 'monitor':
+        elif action == "display_log" and self.STAGE['action'] != 'job':
             return False
-        elif action == "copy_log_path" and self.STAGE['action'] != 'monitor':
+        elif action == "copy_log_path" and self.STAGE['action'] != 'job':
             return False
         return True
 
@@ -100,7 +100,7 @@ class SlurmUI(App):
     
     @run_in_thread
     def action_refresh(self):
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             try:
                 self.update_squeue_table()
             except Exception as e:
@@ -121,16 +121,16 @@ class SlurmUI(App):
         else:
             self.STAGE[self.STAGE["action"]]["sort_ascending"] = not self.STAGE[self.STAGE["action"]].get("sort_ascending", True)
         self.STAGE[self.STAGE["action"]]['sort_column'] = sort_column
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             self.update_squeue_table()
-            self.switch_table_display("monitor")
+            self.switch_table_display("job")
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table()
             self.switch_table_display("gpu")
         self.active_table.cursor_coordinate = (0, sort_column)
     
     def action_copy_jobid(self):
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             try:
                 job_id, _ = self._get_selected_job()
                 
@@ -144,7 +144,7 @@ class SlurmUI(App):
                 self.info_log.write(str(e))
     
     def action_delete(self):
-        if self.STAGE['action'] == "monitor":
+        if self.STAGE['action'] == "job":
             try:
                 job_id, job_name = self._get_selected_job()
                 # self.info_log.clear()
@@ -155,7 +155,7 @@ class SlurmUI(App):
                 self.info_log.write(str(e))
         
     def action_confirm(self):
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             pass
         else:
             # self.info_log.clear()
@@ -164,10 +164,10 @@ class SlurmUI(App):
                 perform_scancel(self.STAGE['job_id'])
                 self.info_log.write(f"Delete: {self.STAGE['job_id']}? succeeded")
                 self.update_squeue_table()
-                self.STAGE["action"] = "monitor"
+                self.STAGE["action"] = "job"
 
     def action_abort_quit(self):
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             self.exit(0)
         else:
             self.action_abort()
@@ -179,9 +179,9 @@ class SlurmUI(App):
             if self.STAGE["action"] == "log":
                 self._minimize_joblog_panel()
 
-        self.STAGE['action'] = "monitor"
+        self.STAGE['action'] = "job"
         self.update_squeue_table()
-        self.switch_table_display("monitor")
+        self.switch_table_display("job")
         # self.info_log.clear()
     
     def action_display_gpu(self):
@@ -195,7 +195,7 @@ class SlurmUI(App):
 
     def action_display_log(self):
         try:
-            if self.STAGE["action"] == "monitor":
+            if self.STAGE["action"] == "job":
                 job_id, job_name = self._get_selected_job()
                 self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
                 self._maximize_joblog_panel()
@@ -205,7 +205,7 @@ class SlurmUI(App):
             self.info_log.write(str(e))
 
     def action_copy_log_path(self):
-        if self.STAGE["action"] == "monitor":
+        if self.STAGE["action"] == "job":
             try:
                 job_id, _ = self._get_selected_job()
                 log_fn = get_log_fn(job_id)
@@ -415,7 +415,7 @@ class SlurmUI(App):
             self.gpu_table.styles.height = "100%"
             self.squeue_table.styles.height = "0%"
             self.active_table = self.gpu_table
-        elif action == "monitor":
+        elif action == "job":
             self.gpu_table.styles.height = "0%"
             self.squeue_table.styles.height = "80%"
             self.active_table = self.squeue_table

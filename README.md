@@ -1,10 +1,14 @@
 # SlurmUI
-Simple terminal UI for slurm. Credit to [Norman Müller](https://github.com/SirWyver/slurmui).
+
+Enhanced terminal UI for slurm. Derived from [SlurmUI](https://github.com/SirWyver/slurmui).
+
+- Job management
+- GPU monitor
+- Log monitor
 
 <div align="center"> 
   <img src="demo.png">
 </div>
-
 
 ## Install
 ```shell
