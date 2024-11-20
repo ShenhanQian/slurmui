@@ -114,14 +114,17 @@ class SlurmUI(App):
     
     def action_copy_jobid(self):
         if self.STAGE["action"] == "monitor":
-            job_id, _ = self._get_selected_job()
-            
-            pyperclip.copy(job_id)  # Copies text to clipboard
-            clipboard_text = pyperclip.paste()
-            if clipboard_text == job_id:
-                self.info_log.write(f"JOBID: {clipboard_text} (copied to clipboard)")
-            else:
-                self.info_log.write(f"JOBID: {job_id} failed to copy to clipboard")
+            try:
+                job_id, _ = self._get_selected_job()
+                
+                pyperclip.copy(job_id)  # Copies text to clipboard
+                clipboard_text = pyperclip.paste()
+                if clipboard_text == job_id:
+                    self.info_log.write(f"JOBID: {clipboard_text} (copied to clipboard)")
+                else:
+                    self.info_log.write(f"JOBID: {job_id} failed to copy to clipboard")
+            except Exception as e:
+                self.info_log.write(str(e))
     
     def action_stage_delete(self):
         if self.STAGE['action'] == "monitor":
@@ -186,14 +189,17 @@ class SlurmUI(App):
 
     def action_copy_log_path(self):
         if self.STAGE["action"] == "monitor":
-            job_id, _ = self._get_selected_job()
-            log_fn = get_log_fn(job_id)
-            pyperclip.copy(log_fn)
-            clipboard_text = pyperclip.paste()
-            if clipboard_text == log_fn:
-                self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
-            else:
-                self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
+            try:
+                job_id, _ = self._get_selected_job()
+                log_fn = get_log_fn(job_id)
+                pyperclip.copy(log_fn)
+                clipboard_text = pyperclip.paste()
+                if clipboard_text == log_fn:
+                    self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
+                else:
+                    self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
+            except Exception as e:
+                self.info_log.write(str(e))
 
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
