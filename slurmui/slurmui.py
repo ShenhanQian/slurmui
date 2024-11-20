@@ -43,10 +43,10 @@ class SlurmUI(App):
     BINDINGS = [
         Binding("enter", "confirm", "Confirm", priority=True),
         Binding("r", "refresh", "Refresh"),
+        Binding("q", "abort_quit", "Quit"),
         Binding("s", "sort", "Sort"),
         Binding("i", "copy_jobid", "Copy JobID"),
-        Binding("d", "stage_delete", "Delete job"),
-        Binding("q", "abort_quit", "Quit"),
+        Binding("d", "delete", "Delete job"),
         Binding("g", "display_gpu", "GPU"),
         Binding("l", "display_log", "Log"),
         Binding("L", "copy_log_path", "Copy Log Path"),
@@ -77,6 +77,23 @@ class SlurmUI(App):
         self.init_gpu_table()
         self.switch_table_display("monitor")
         self.init_squeue_table()
+    
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  
+        """Check if an action may run."""
+        # self.info_log.write(f"Action: {action}")
+        if action == "sort" and self.STAGE['action'] == 'log':
+            return False
+        elif action == "copy_jobid" and self.STAGE['action'] != 'monitor':
+            return False
+        elif action == "delete" and self.STAGE['action'] != 'monitor':
+            return False
+        elif action == "display_gpu" and self.STAGE['action'] != 'monitor':
+            return False
+        elif action == "display_log" and self.STAGE['action'] != 'monitor':
+            return False
+        elif action == "copy_log_path" and self.STAGE['action'] != 'monitor':
+            return False
+        return True
 
     def auto_refresh(self):
         self.action_refresh()
@@ -126,7 +143,7 @@ class SlurmUI(App):
             except Exception as e:
                 self.info_log.write(str(e))
     
-    def action_stage_delete(self):
+    def action_delete(self):
         if self.STAGE['action'] == "monitor":
             try:
                 job_id, job_name = self._get_selected_job()
@@ -207,7 +224,7 @@ class SlurmUI(App):
         njobs = self.stats.get("njobs", 0)
         njobs_running = self.stats.get("njobs_running", 0)
 
-        self.title = f"SlurmUI (v{importlib.metadata.version('slurmui')}) \t[Jobs: {njobs_running}/{njobs} | GPUs: {ngpus_avail}/{ngpus}]"
+        self.title = f"[Jobs: {njobs_running}/{njobs}]        SlurmUI (v{importlib.metadata.version('slurmui')})        [GPUs: {ngpus_avail}/{ngpus}]"
 
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
@@ -315,6 +332,7 @@ class SlurmUI(App):
         self.info_log.styles.max_height="20%"
         self.info_log.can_focus = False
         self.info_log.styles.border = ("heavy","grey")
+        self.info_log.focus()
 
         self.job_log.styles.max_height="0%"
         self.job_log.styles.border = ("none","grey")
@@ -325,11 +343,11 @@ class SlurmUI(App):
         self.squeue_table.styles.height="0%"
         
         self.info_log.styles.max_height="0%"
-        self.info_log.can_focus = True
         self.info_log.styles.border = ("none","grey")
         
         self.job_log.styles.max_height="100%"
         self.job_log.styles.border = ("heavy","grey")
+        self.job_log.focus()
 
     @run_in_thread
     def init_gpu_table(self, sort_column=None, sort_ascending=True):
