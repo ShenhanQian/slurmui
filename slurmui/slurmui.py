@@ -47,7 +47,8 @@ class SlurmUI(App):
         Binding("s", "sort", "Sort"),
         Binding("i", "copy_jobid", "Copy JobID"),
         Binding("d", "delete", "Delete job"),
-        Binding("g", "display_gpu", "GPU"),
+        Binding("g", "display_all_gpus", "All GPUs"),
+        Binding("G", "print_gpustat", "GPU stat"),
         Binding("l", "display_log", "Log"),
         Binding("L", "copy_log_path", "Copy Log Path"),
     ]
@@ -87,7 +88,9 @@ class SlurmUI(App):
             return False
         elif action == "delete" and self.STAGE['action'] != 'job':
             return False
-        elif action == "display_gpu" and self.STAGE['action'] != 'job':
+        elif action == "display_all_gpus" and self.STAGE['action'] != 'job':
+            return False
+        elif action == "print_gpustat" and self.STAGE['action'] != 'job':
             return False
         elif action == "display_log" and self.STAGE['action'] != 'job':
             return False
@@ -184,11 +187,21 @@ class SlurmUI(App):
         self.switch_table_display("job")
         # self.info_log.clear()
     
-    def action_display_gpu(self):
+    def action_display_all_gpus(self):
         self.STAGE.update({"action": "gpu"})
         try:
             self.update_gpu_table()
             self.switch_table_display("gpu")
+        except Exception as e:
+            # self.info_log.clear()
+            self.info_log.write(str(e))
+    
+    def action_print_gpustat(self):
+        try:
+            if self.STAGE["action"] == "job":
+                job_id, _ = self._get_selected_job()
+                gpustat = subprocess.check_output(f"""srun --jobid {job_id} gpustat""", shell=True).decode("utf-8")
+                self.info_log.write(gpustat)
         except Exception as e:
             # self.info_log.clear()
             self.info_log.write(str(e))

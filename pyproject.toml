@@ -16,6 +16,7 @@ dependencies = [
     "textual>=0.61.0",
     "pandas",
     "pyperclip",
+    "gpustat",
 ]
 [project.scripts]
 slurmui = "slurmui.slurmui_cli:slurmui_cli"
