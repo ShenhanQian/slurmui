@@ -5,6 +5,7 @@ from textual.binding import Binding
 from textual.widgets import DataTable
 from textual.widgets import Header, Footer, RichLog
 from textual.containers import Container
+from rich.text import Text
 import subprocess
 import pandas as pd
 import re
@@ -39,31 +40,43 @@ class SlurmUI(App):
         "gpu": {},
     }
     stats = {}
+    selected_jobid = []
+    selected_text_style = "on orange3"
+    info_border_color = "rgb(30, 30, 30)"
+    job_border_color = "rgb(40, 40, 40)"
 
+    CSS_PATH = "slurmui.tcss"
     BINDINGS = [
-        Binding("enter", "confirm", "Confirm", priority=True),
-        Binding("r", "refresh", "Refresh"),
+        Binding("space", "select", "Select"),
         Binding("q", "abort_quit", "Quit"),
+        Binding("v", "select_inverse", "Invesrse"),
+        Binding("r", "refresh", "Refresh"),
+        Binding("enter", "confirm", "Confirm", priority=True, key_display='enter'),
         Binding("s", "sort", "Sort"),
-        Binding("i", "copy_jobid", "Copy JobID"),
         Binding("d", "delete", "Delete job"),
         Binding("g", "display_all_gpus", "All GPUs"),
         Binding("G", "print_gpustat", "GPU stat"),
         Binding("l", "display_log", "Log"),
         Binding("L", "copy_log_path", "Copy Log Path"),
+        Binding("i", "copy_jobid", "Copy JobID"),
     ]
 
     def compose(self) -> ComposeResult:
         self.header = Header()
         self.footer = Footer()
+
         self.gpu_table = DataTable(id="gpu_table")
-        self.squeue_table = DataTable(id="squeue_table")
-        self.active_table = self.squeue_table
         self.gpu_table.zebra_stripes = True
+        self.squeue_table = DataTable(id="squeue_table")
         self.squeue_table.zebra_stripes = True
+        self.active_table = self.squeue_table
+
         self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
+        self.info_log.can_focus = False
+        
         self.job_log = RichLog(wrap=True, highlight=True, id="job_log", auto_scroll=False)
         self.job_log_position = None
+        
         yield self.header
         yield Container(self.gpu_table, self.squeue_table, self.info_log, self.job_log)
         yield self.footer
@@ -79,14 +92,23 @@ class SlurmUI(App):
         self.switch_table_display("job")
         self.init_squeue_table()
     
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  
+    def check_action(self, action: str, parameters):  
         """Check if an action may run."""
         # self.info_log.write(f"Action: {action}")
-        if action == "sort" and self.STAGE['action'] == 'log':
+        
+        if action == "select" and self.STAGE['action'] not in ['job', 'select']:
             return False
-        elif action == "copy_jobid" and self.STAGE['action'] != 'job':
+        elif action == "abort_quit":
+            pass
+        elif action == "select_inverse" and self.STAGE['action'] not in ['job', 'select']:
             return False
-        elif action == "delete" and self.STAGE['action'] != 'job':
+        elif action == "refresh" and self.STAGE['action'] not in ['job', 'gpu', 'log']:
+            return False
+        elif action == "confirm" and self.STAGE['action'] != 'delete':
+            return False
+        elif action == "sort" and self.STAGE['action'] not in ['job', 'gpu']:
+            return False
+        elif action == "delete" and self.STAGE['action'] not in ['job', 'select']:
             return False
         elif action == "display_all_gpus" and self.STAGE['action'] != 'job':
             return False
@@ -96,10 +118,85 @@ class SlurmUI(App):
             return False
         elif action == "copy_log_path" and self.STAGE['action'] != 'job':
             return False
+        elif action == "copy_jobid" and self.STAGE['action'] != 'job':
+            return False
         return True
 
     def auto_refresh(self):
         self.action_refresh()
+
+    def action_abort_quit(self):
+        if self.STAGE["action"] == "job":
+            self.exit(0)
+        else:
+            self.action_abort()
+
+    def action_abort(self):
+        try:
+            if self.STAGE["action"] == "delete":
+                self.info_log.write("Delete: aborted")
+                self.selected_jobid = []
+            elif self.STAGE["action"] == "log":
+                self._minimize_joblog_panel()
+            elif self.STAGE["action"] == "select":
+                self.info_log.write("Selected: none")
+                self.selected_jobid = []
+            self.STAGE['action'] = "job"
+            self.update_squeue_table()
+            self.switch_table_display("job")
+            self.refresh_bindings()
+        except Exception as e:
+            self.info_log.write(str(e))
+    
+    def action_select_inverse(self):
+        try:
+            assert self.STAGE["action"] in ["job", "select"]
+            for i in range(len(self.active_table.rows)):
+                job_id = str(self.active_table.get_cell_at((i, 0)))
+                
+                if job_id in self.selected_jobid:
+                    self.selected_jobid.remove(job_id)
+                    self.active_table.update_cell_at((i, 0), job_id)
+                else:
+                    self.selected_jobid.append(job_id)
+                    self.active_table.update_cell_at((i, 0), Text(str(job_id), style=self.selected_text_style))
+                    self.active_table.move_cursor(row=i, column=0)
+            if self.selected_jobid:
+                self.STAGE["action"] = "select"
+                self.info_log.write(f"Selected: {' '.join(self.selected_jobid)}")
+            else:
+                self.STAGE["action"] = "job"
+                self.info_log.write(f"Selected: none")
+            
+            self.refresh_bindings()  
+        except Exception as e:
+            self.info_log.write(str(e))
+    
+    def action_select(self):
+        try:
+            if (self.STAGE["action"] == "job" and not self.selected_jobid) or self.STAGE["action"] == "select":
+                i = self.active_table.cursor_coordinate[0]
+                value = str(self.active_table.get_cell_at((i, 0)))
+
+                job_id, _ = self._get_selected_job()
+                if job_id in self.selected_jobid:
+                    self.selected_jobid.remove(job_id)
+                    self.active_table.update_cell_at((i, 0), value)
+                else:
+                    self.selected_jobid.append(job_id)
+                    self.active_table.update_cell_at((i, 0), Text(str(value), style=self.selected_text_style))
+                
+                if self.selected_jobid:
+                    self.STAGE["action"] = "select"
+                    self.info_log.write(f"Selected: {' '.join(self.selected_jobid)}")
+                else:
+                    self.STAGE["action"] = "job"
+                    self.info_log.write(f"Selected: none")
+                self.active_table.action_cursor_down()
+            
+            self.refresh_bindings()  
+        except Exception as e:
+            self.info_log.write(str(e))
     
     @run_in_thread
     def action_refresh(self):
@@ -117,6 +214,20 @@ class SlurmUI(App):
                 raise ValueError(str(e))
         self.update_title()
     
+    def action_confirm(self):
+        try:
+            # job to delete
+            if self.STAGE["action"] == "delete":
+                perform_scancel(self.STAGE['job_id'])
+                self.info_log.write(f"Delete: {self.STAGE['job_id']}? succeeded")
+                self.selected_jobid = []
+                self.update_squeue_table()
+                self.STAGE["action"] = "job"
+
+            self.refresh_bindings()
+        except Exception as e:
+            self.info_log.write(str(e))
+
     def action_sort(self):
         sort_column = self.active_table.cursor_column
         if sort_column != self.STAGE[self.STAGE["action"]].get("sort_column"):
@@ -130,8 +241,65 @@ class SlurmUI(App):
         elif self.STAGE["action"] == "gpu":
             self.update_gpu_table()
             self.switch_table_display("gpu")
-        self.active_table.cursor_coordinate = (0, sort_column)
+        self.active_table.move_cursor(row=0, column=sort_column)
     
+    def action_delete(self):
+        try:
+            if self.STAGE["action"] == "job":
+                job_id, job_name = self._get_selected_job()
+                self.info_log.write(f"Delete: {job_id}? press <<ENTER>> to confirm")
+                self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
+            elif self.STAGE["action"] == "select":
+                self.info_log.write(f"Delete: {' '.join(self.selected_jobid)}? press <<ENTER>> to confirm")
+                self.STAGE.update({"action": "delete", "job_id": ' '.join(self.selected_jobid)})
+            
+            self.refresh_bindings()  
+        except Exception as e:
+            self.info_log.write(str(e))
+
+    def action_display_all_gpus(self):
+        try:
+            self.STAGE.update({"action": "gpu"})
+            self.update_gpu_table()
+            self.switch_table_display("gpu")
+            self.refresh_bindings()  
+        except Exception as e:
+            self.info_log.write(str(e))
+    
+    def action_print_gpustat(self):
+        try:
+            if self.STAGE["action"] == "job":
+                job_id, _ = self._get_selected_job()
+                gpustat = subprocess.check_output(f"""srun --jobid {job_id} gpustat""", shell=True, timeout=3).decode("utf-8").rstrip()
+                self.info_log.write(gpustat)
+        except Exception as e:
+            self.info_log.write(str(e))
+
+    def action_display_log(self):
+        try:
+            if self.STAGE["action"] == "job":
+                job_id, job_name = self._get_selected_job()
+                self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
+                self._maximize_joblog_panel()
+                self.update_log(job_id)
+            self.refresh_bindings()  
+        except Exception as e:
+            self.info_log.write(str(e))
+
+    def action_copy_log_path(self):
+        try:
+            if self.STAGE["action"] == "job":
+                job_id, _ = self._get_selected_job()
+                log_fn = get_log_fn(job_id)
+                pyperclip.copy(log_fn)
+                clipboard_text = pyperclip.paste()
+                if clipboard_text == log_fn:
+                    self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
+                else:
+                    self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
+        except Exception as e:
+            self.info_log.write(str(e))
+
     def action_copy_jobid(self):
         if self.STAGE["action"] == "job":
             try:
@@ -146,91 +314,6 @@ class SlurmUI(App):
             except Exception as e:
                 self.info_log.write(str(e))
     
-    def action_delete(self):
-        if self.STAGE['action'] == "job":
-            try:
-                job_id, job_name = self._get_selected_job()
-                # self.info_log.clear()
-                self.info_log.write(f"Delete: {job_id}? press <<ENTER>> to confirm")
-                self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
-            except Exception as e:
-                # self.info_log.clear()
-                self.info_log.write(str(e))
-        
-    def action_confirm(self):
-        if self.STAGE["action"] == "job":
-            pass
-        else:
-            # self.info_log.clear()
-            # job to delete
-            if self.STAGE["action"] == "delete":
-                perform_scancel(self.STAGE['job_id'])
-                self.info_log.write(f"Delete: {self.STAGE['job_id']}? succeeded")
-                self.update_squeue_table()
-                self.STAGE["action"] = "job"
-
-    def action_abort_quit(self):
-        if self.STAGE["action"] == "job":
-            self.exit(0)
-        else:
-            self.action_abort()
-
-    def action_abort(self):
-        if self.STAGE["action"] == "delete":
-            self.info_log.write("Delete: aborted")
-        else:
-            if self.STAGE["action"] == "log":
-                self._minimize_joblog_panel()
-
-        self.STAGE['action'] = "job"
-        self.update_squeue_table()
-        self.switch_table_display("job")
-        # self.info_log.clear()
-    
-    def action_display_all_gpus(self):
-        self.STAGE.update({"action": "gpu"})
-        try:
-            self.update_gpu_table()
-            self.switch_table_display("gpu")
-        except Exception as e:
-            # self.info_log.clear()
-            self.info_log.write(str(e))
-    
-    def action_print_gpustat(self):
-        try:
-            if self.STAGE["action"] == "job":
-                job_id, _ = self._get_selected_job()
-                gpustat = subprocess.check_output(f"""srun --jobid {job_id} gpustat""", shell=True).decode("utf-8")
-                self.info_log.write(gpustat)
-        except Exception as e:
-            # self.info_log.clear()
-            self.info_log.write(str(e))
-
-    def action_display_log(self):
-        try:
-            if self.STAGE["action"] == "job":
-                job_id, job_name = self._get_selected_job()
-                self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
-                self._maximize_joblog_panel()
-                self.update_log(job_id)
-        except Exception as e:
-            # self.info_log.clear()
-            self.info_log.write(str(e))
-
-    def action_copy_log_path(self):
-        if self.STAGE["action"] == "job":
-            try:
-                job_id, _ = self._get_selected_job()
-                log_fn = get_log_fn(job_id)
-                pyperclip.copy(log_fn)
-                clipboard_text = pyperclip.paste()
-                if clipboard_text == log_fn:
-                    self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
-                else:
-                    self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
-            except Exception as e:
-                self.info_log.write(str(e))
-
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
         ngpus = self.stats.get("ngpus", 0)
@@ -250,30 +333,31 @@ class SlurmUI(App):
 
     @run_in_thread
     def init_squeue_table(self, sort_column=None, sort_ascending=True):
+        self.squeue_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
+        self.update_title()
 
         self.squeue_table.clear()
         self.squeue_table.add_columns(*squeue_df.columns)
         for _, row in squeue_df.iterrows():
             table_row = [str(row[col]) for col in squeue_df.columns]
             self.squeue_table.add_row(*table_row)
-        
-        self.update_title()
-        self.squeue_table.focus()
 
     @run_in_thread
     def update_squeue_table(self, sort_column=None, sort_ascending=True):
+        self.squeue_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
             
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
+        self.update_title()
         
         # If the table is empty, initialize it
         if not self.squeue_table.columns:
@@ -298,15 +382,12 @@ class SlurmUI(App):
         while len(self.squeue_table.rows) > len(squeue_df):
             row_key, _ = self.squeue_table.coordinate_to_cell_key((len(self.squeue_table.rows) - 1, 0))
             self.squeue_table.remove_row(row_key)
-        
-        self.update_title()
-        self.squeue_table.focus()
 
     def _get_selected_job(self):
         row_idx = self.active_table.cursor_row
         row = self.active_table.get_row_at(row_idx)
-        job_id = row[0]
-        job_name = row[2]
+        job_id = str(row[0])
+        job_name = str(row[2])
         return job_id, job_name
 
     def update_log(self, job_id):
@@ -341,14 +422,13 @@ class SlurmUI(App):
 
     def _minimize_joblog_panel(self):
         self.squeue_table.styles.height="80%"
+        self.squeue_table.focus()
         
         self.info_log.styles.max_height="20%"
-        self.info_log.can_focus = False
-        self.info_log.styles.border = ("heavy","grey")
-        self.info_log.focus()
+        self.info_log.styles.border = ("heavy", self.info_border_color)
 
         self.job_log.styles.max_height="0%"
-        self.job_log.styles.border = ("none","grey")
+        self.job_log.styles.border = ("none", self.job_border_color)
         self.job_log_position = None
         self.job_log.clear()
 
@@ -356,32 +436,32 @@ class SlurmUI(App):
         self.squeue_table.styles.height="0%"
         
         self.info_log.styles.max_height="0%"
-        self.info_log.styles.border = ("none","grey")
+        self.info_log.styles.border = ("none", self.info_border_color)
         
         self.job_log.styles.max_height="100%"
-        self.job_log.styles.border = ("heavy","grey")
+        self.job_log.styles.border = ("heavy", self.job_border_color)
         self.job_log.focus()
 
     @run_in_thread
     def init_gpu_table(self, sort_column=None, sort_ascending=True):
+        self.gpu_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
+        self.update_title()
 
         self.gpu_table.clear()
         self.gpu_table.add_columns(*overview_df.columns)
         for _, row in overview_df.iterrows():
             table_row = [str(row[col]) for col in overview_df.columns]
             self.gpu_table.add_row(*table_row)
-
-        self.gpu_table.focus()
-        self.update_title()
     
     @run_in_thread
     def update_gpu_table(self, sort_column=None, sort_ascending=True):
+        self.gpu_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
@@ -412,7 +492,6 @@ class SlurmUI(App):
             self.gpu_table.remove_row(len(self.gpu_table.rows) - 1)
         
         self.update_title()
-        self.gpu_table.focus()
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
         overview_df = get_sinfo(self.cluster)
@@ -516,11 +595,11 @@ def get_sinfo(cluster):
                 "-p 'mcml-hgx-a100-80x4'",
                 "-p 'mcml-hgx-h100-92x4'",
                 "-p 'lrz-dgx-a100-80x8'", 
-                "-p 'lrz-hgx-h100-92x4'"
-                "-p 'lrz-dgx-1-v100x8'", 
-                "-p 'lrz-dgx-1-p100x8'", 
-                "-p 'lrz-hpe-p100x4'", 
-                "-p 'lrz-v100x2'",
+                "-p 'lrz-hgx-h100-92x4'",
+                # "-p 'lrz-dgx-1-v100x8'", 
+                # "-p 'lrz-dgx-1-p100x8'", 
+                # "-p 'lrz-hpe-p100x4'", 
+                # "-p 'lrz-v100x2'",
             ]
             for p in partitions:
                 s = subprocess.check_output(f"""sinfo --Node {p} -O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")  # WARNING: insufficient width for any item can crash the prgram
