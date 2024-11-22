@@ -8,8 +8,8 @@ Footer {
     background: #303030;
 }
 
-DataTable {
-    background: $boost;
+.status_bar {
+    height: 1;
 }
 
 Static {
@@ -17,4 +17,8 @@ Static {
     width: 1fr;
     background: $boost;
     content-align: center middle;
+}
+
+DataTable {
+    background: $boost;
 }
