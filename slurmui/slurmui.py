@@ -13,7 +13,6 @@ import os
 import threading
 from functools import wraps
 from datetime import datetime
-import pyperclip
 
 
 DEBUG = False
@@ -42,8 +41,8 @@ class SlurmUI(App):
     stats = {}
     selected_jobid = []
     selected_text_style = "on orange3"
-    info_border_color = "rgb(30, 30, 30)"
-    job_border_color = "rgb(40, 40, 40)"
+    info_border_color = "white"
+    job_border_color = "white"
 
     CSS_PATH = "slurmui.tcss"
     BINDINGS = [
@@ -57,8 +56,6 @@ class SlurmUI(App):
         Binding("g", "display_all_gpus", "All GPUs"),
         Binding("G", "print_gpustat", "GPU stat"),
         Binding("l", "display_log", "Log"),
-        Binding("L", "copy_log_path", "Copy Log Path"),
-        Binding("i", "copy_jobid", "Copy JobID"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -73,6 +70,7 @@ class SlurmUI(App):
 
         self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
         self.info_log.can_focus = False
+        self.info_log.border_title = "Info"
         
         self.job_log = RichLog(wrap=True, highlight=True, id="job_log", auto_scroll=False)
         self.job_log_position = None
@@ -115,10 +113,6 @@ class SlurmUI(App):
         elif action == "print_gpustat" and self.STAGE['action'] != 'job':
             return False
         elif action == "display_log" and self.STAGE['action'] != 'job':
-            return False
-        elif action == "copy_log_path" and self.STAGE['action'] != 'job':
-            return False
-        elif action == "copy_jobid" and self.STAGE['action'] != 'job':
             return False
         return True
 
@@ -286,34 +280,6 @@ class SlurmUI(App):
         except Exception as e:
             self.info_log.write(str(e))
 
-    def action_copy_log_path(self):
-        try:
-            if self.STAGE["action"] == "job":
-                job_id, _ = self._get_selected_job()
-                log_fn = get_log_fn(job_id)
-                pyperclip.copy(log_fn)
-                clipboard_text = pyperclip.paste()
-                if clipboard_text == log_fn:
-                    self.info_log.write(f"JOBLOG: {clipboard_text} (copied to clipboard)")
-                else:
-                    self.info_log.write(f"JOBLOG: {log_fn} (failed to copy to clipboard)")
-        except Exception as e:
-            self.info_log.write(str(e))
-
-    def action_copy_jobid(self):
-        if self.STAGE["action"] == "job":
-            try:
-                job_id, _ = self._get_selected_job()
-                
-                pyperclip.copy(job_id)  # Copies text to clipboard
-                clipboard_text = pyperclip.paste()
-                if clipboard_text == job_id:
-                    self.info_log.write(f"JOBID: {clipboard_text} (copied to clipboard)")
-                else:
-                    self.info_log.write(f"JOBID: {job_id} failed to copy to clipboard")
-            except Exception as e:
-                self.info_log.write(str(e))
-    
     def update_title(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
         ngpus = self.stats.get("ngpus", 0)
@@ -393,6 +359,8 @@ class SlurmUI(App):
     def update_log(self, job_id):
         try:
             log_fn = get_log_fn(job_id)
+            self.job_log.border_title = f"{log_fn}"
+            self.job_log.border_subtitle = f"{log_fn}"
             current_scroll_y = self.job_log.scroll_offset[1]
 
             if not self.job_log_position:
