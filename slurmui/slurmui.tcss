@@ -1,4 +1,20 @@
 Header {
-    height: 2;
     text-style: bold;
+    background: $boost;
+}
+
+Footer {
+    text-style: bold;
+    background: #303030;
+}
+
+DataTable {
+    background: $boost;
+}
+
+Static {
+    height: 1fr;
+    width: 1fr;
+    background: $boost;
+    content-align: center middle;
 }

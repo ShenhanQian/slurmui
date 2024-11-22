@@ -2,9 +2,8 @@ import io
 import importlib.metadata
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import DataTable
-from textual.widgets import Header, Footer, RichLog
-from textual.containers import Container
+from textual.widgets import Header, Footer, Static, RichLog, DataTable
+from textual.containers import Container, Horizontal
 from rich.text import Text
 import subprocess
 import pandas as pd
@@ -30,6 +29,7 @@ def run_in_thread(func):
 
 class SlurmUI(App):
     cluster = None
+    interval = 10
     STAGE = {
         "action": "job",
         "job": {
@@ -40,11 +40,14 @@ class SlurmUI(App):
     }
     stats = {}
     selected_jobid = []
-    selected_text_style = "on orange3"
-    info_border_color = "white"
-    job_border_color = "white"
+    theme = "textual-dark"
+    selected_text_style = "bold on orange3"
+    border_type = "solid"
+    border_color = "white"
 
     CSS_PATH = "slurmui.tcss"
+    TITLE = f"SlurmUI (v{importlib.metadata.version('slurmui')})"
+
     BINDINGS = [
         Binding("space", "select", "Select"),
         Binding("q", "abort_quit", "Quit"),
@@ -62,10 +65,15 @@ class SlurmUI(App):
         self.header = Header()
         self.footer = Footer()
 
+        self.njobs = Static("Jobs: ")
+        self.ngpus = Static("GPUs:")
+        self.timestamp = Static(":::")
+        self.status_bar = Horizontal(self.njobs, self.ngpus, self.timestamp)
+
         self.gpu_table = DataTable(id="gpu_table")
-        self.gpu_table.zebra_stripes = True
+        # self.gpu_table.zebra_stripes = True
         self.squeue_table = DataTable(id="squeue_table")
-        self.squeue_table.zebra_stripes = True
+        # self.squeue_table.zebra_stripes = True
         self.active_table = self.squeue_table
 
         self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
@@ -76,19 +84,18 @@ class SlurmUI(App):
         self.job_log_position = None
         
         yield self.header
-        yield Container(self.gpu_table, self.squeue_table, self.info_log, self.job_log)
+        yield Container(self.status_bar, self.squeue_table, self.gpu_table, self.info_log, self.job_log)
         yield self.footer
 
-        if self.interval > 0:
-            self.set_interval(self.interval, self.auto_refresh)
-
     def on_mount(self):
+        self.init_squeue_table()
+        self.init_gpu_table()
         self._minimize_joblog_panel()
+        self.switch_table_display("job")
 
     def on_ready(self) -> None:
-        self.init_gpu_table()
-        self.switch_table_display("job")
-        self.init_squeue_table()
+        if self.interval > 0:
+            self.set_interval(self.interval, self.auto_refresh)
     
     def check_action(self, action: str, parameters):  
         """Check if an action may run."""
@@ -206,7 +213,7 @@ class SlurmUI(App):
                 self.update_gpu_table()
             except Exception as e:
                 raise ValueError(str(e))
-        self.update_title()
+        self.update_status()
     
     def action_confirm(self):
         try:
@@ -280,13 +287,16 @@ class SlurmUI(App):
         except Exception as e:
             self.info_log.write(str(e))
 
-    def update_title(self):
+    @run_in_thread
+    def update_status(self):
         ngpus_avail = self.stats.get("ngpus_avail", 0)
         ngpus = self.stats.get("ngpus", 0)
         njobs = self.stats.get("njobs", 0)
         njobs_running = self.stats.get("njobs_running", 0)
 
-        self.title = f"[Jobs: {njobs_running}/{njobs}]        SlurmUI (v{importlib.metadata.version('slurmui')})        [GPUs: {ngpus_avail}/{ngpus}]"
+        self.njobs.update(f"Jobs: {njobs_running}/{njobs}")
+        self.ngpus.update(f"GPUs: {ngpus_avail}/{ngpus}")
+        self.timestamp.update(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     def query_squeue(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
@@ -299,14 +309,13 @@ class SlurmUI(App):
 
     @run_in_thread
     def init_squeue_table(self, sort_column=None, sort_ascending=True):
-        self.squeue_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.update_title()
+        self.update_status()
 
         self.squeue_table.clear()
         self.squeue_table.add_columns(*squeue_df.columns)
@@ -316,14 +325,13 @@ class SlurmUI(App):
 
     @run_in_thread
     def update_squeue_table(self, sort_column=None, sort_ascending=True):
-        self.squeue_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
             
         squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.update_title()
+        self.update_status()
         
         # If the table is empty, initialize it
         if not self.squeue_table.columns:
@@ -392,34 +400,33 @@ class SlurmUI(App):
         self.squeue_table.styles.height="80%"
         self.squeue_table.focus()
         
-        self.info_log.styles.max_height="20%"
-        self.info_log.styles.border = ("heavy", self.info_border_color)
+        self.info_log.styles.height="20%"
+        self.info_log.styles.border = (self.border_type, self.border_color)
 
-        self.job_log.styles.max_height="0%"
-        self.job_log.styles.border = ("none", self.job_border_color)
+        self.job_log.styles.height="0%"
+        self.job_log.styles.border = (self.border_type, self.border_color)
         self.job_log_position = None
         self.job_log.clear()
 
     def _maximize_joblog_panel(self):
         self.squeue_table.styles.height="0%"
         
-        self.info_log.styles.max_height="0%"
-        self.info_log.styles.border = ("none", self.info_border_color)
+        self.info_log.styles.height="0%"
+        self.info_log.styles.border = ("none", self.border_color)
         
-        self.job_log.styles.max_height="100%"
-        self.job_log.styles.border = ("heavy", self.job_border_color)
+        self.job_log.styles.height="100%"
+        self.job_log.styles.border = ("solid", self.border_color)
         self.job_log.focus()
 
     @run_in_thread
     def init_gpu_table(self, sort_column=None, sort_ascending=True):
-        self.gpu_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
             sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
 
         overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.update_title()
+        self.update_status()
 
         self.gpu_table.clear()
         self.gpu_table.add_columns(*overview_df.columns)
@@ -429,7 +436,6 @@ class SlurmUI(App):
     
     @run_in_thread
     def update_gpu_table(self, sort_column=None, sort_ascending=True):
-        self.gpu_table.focus()
         if 'sort_column' in self.STAGE[self.STAGE["action"]]:
             sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
         if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
@@ -459,7 +465,7 @@ class SlurmUI(App):
         while len(self.gpu_table.rows) > len(overview_df):
             self.gpu_table.remove_row(len(self.gpu_table.rows) - 1)
         
-        self.update_title()
+        self.update_status()
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
         overview_df = get_sinfo(self.cluster)
@@ -472,8 +478,8 @@ class SlurmUI(App):
 
     def switch_table_display(self, action):
         if action == "gpu":
-            self.gpu_table.styles.height = "100%"
             self.squeue_table.styles.height = "0%"
+            self.gpu_table.styles.height = "100%"
             self.active_table = self.gpu_table
         elif action == "job":
             self.gpu_table.styles.height = "0%"
@@ -481,6 +487,7 @@ class SlurmUI(App):
             self.active_table = self.squeue_table
         else:
             raise ValueError(f"Invalid action: {action}")
+        self.active_table.focus()
 
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
@@ -563,6 +570,7 @@ def get_sinfo(cluster):
                 "-p 'mcml-hgx-a100-80x4'",
                 "-p 'mcml-hgx-h100-92x4'",
                 "-p 'lrz-dgx-a100-80x8'", 
+                "-p 'lrz-hgx-a100-80x4'", 
                 "-p 'lrz-hgx-h100-92x4'",
                 # "-p 'lrz-dgx-1-v100x8'", 
                 # "-p 'lrz-dgx-1-p100x8'", 
