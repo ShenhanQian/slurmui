@@ -618,7 +618,7 @@ def get_squeue():
         response_string = SQUEUE_DEBUG
     else:
         sep = "|"
-        response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%Q{sep}%.20P{sep}%.100j{sep}%.10u{sep}%.8T{sep}%.10M{sep}%.6l{sep}%.S{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
+        response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%.20P{sep}%.200j{sep}%.8T{sep}%.10M{sep}%.6l{sep}%.S{sep}%.10u{sep}%Q{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=sep)
