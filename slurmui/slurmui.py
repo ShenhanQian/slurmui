@@ -72,6 +72,7 @@ class SlurmUI(App):
         Binding("G", "print_gpustat", "GPU"),
         Binding("g", "display_node_list", "Nodes"),
         Binding("l", "display_job_log", "Log"),
+        Binding("L", "open_with_less", "Open with less"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -120,7 +121,7 @@ class SlurmUI(App):
             return False
         elif action == "select_inverse" and self.STAGE['action'] not in ['job', 'select']:
             return False
-        elif action == "refresh" and self.STAGE['action'] not in ['job', 'node', 'log']:
+        elif action == "refresh" and self.STAGE['action'] not in ['job', 'node', 'job_log']:
             return False
         elif action == "confirm" and self.STAGE['action'] != 'delete':
             return False
@@ -133,6 +134,8 @@ class SlurmUI(App):
         elif action == "display_node_list" and self.STAGE['action'] not in ['job', 'node']:
             return False
         elif action == "display_job_log" and self.STAGE['action'] != 'job':
+            return False
+        elif action == "open_with_less" and self.STAGE['action'] not in ['job', 'job_log']:
             return False
         return True
 
@@ -148,7 +151,7 @@ class SlurmUI(App):
         if self.STAGE["action"] == "delete":
             self.info_log.write("Delete: aborted")
             self.selected_jobid = []
-        elif self.STAGE["action"] == "log":
+        elif self.STAGE["action"] == "job_log":
             self.job_log_position = None
         elif self.STAGE["action"] == "select":
             self.info_log.write("Select: none")
@@ -211,7 +214,7 @@ class SlurmUI(App):
     def action_refresh(self):
         if self.STAGE["action"] == "job":
             self.update_job_table()
-        elif self.STAGE["action"] == "log":
+        elif self.STAGE["action"] == "job_log":
             self.update_log(self.STAGE["job_id"])
         elif self.STAGE["action"] == "node":
             self.update_node_table()
@@ -277,10 +280,19 @@ class SlurmUI(App):
     def action_display_job_log(self):
         if self.STAGE["action"] == "job":
             job_id, job_name = self._get_selected_job()
-            self.STAGE.update({"action": "log", "job_id": job_id, "job_name": job_name})
+            self.STAGE.update({"action": "job_log", "job_id": job_id, "job_name": job_name})
             self.switch_display("job_log")
             self.update_log(job_id)
-        self.refresh_bindings()  
+        self.refresh_bindings()
+    
+    @handle_error
+    def action_open_with_less(self):
+        if self.STAGE["action"] in ["job", "job_log"]:
+            job_id, _ = self._get_selected_job()
+            log_fn = get_log_fn(job_id)
+            with self.suspend():
+                subprocess.run(['less', log_fn])
+            self.refresh()
 
     def switch_display(self, action):
         if action == "job":
