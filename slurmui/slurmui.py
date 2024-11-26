@@ -11,7 +11,7 @@ import re
 import os
 import threading
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 DEBUG = False
@@ -39,19 +39,23 @@ def handle_error(func):
 
 
 class SlurmUI(App):
+    # configuration that can be set from the command line
     cluster = None
     interval = 10
+    history_range = "1 week"  # Default history range
+
+    # internal states
     STAGE = {
         "action": "job",
         "job": {
             "sort_column": 0,
-            "sort_ascending": True
+            "sort_ascending": True,
         },
-        "node": {},
     }
     stats = {}
     selected_jobid = []
     show_all_nodes = False
+    show_all_history = False
 
     theme = "textual-dark"
     selected_text_style = "bold on orange3"
@@ -73,6 +77,8 @@ class SlurmUI(App):
         Binding("g", "display_node_list", "Nodes"),
         Binding("l", "display_job_log", "Log"),
         Binding("L", "open_with_less", "Open with less"),
+        Binding("h", "display_history_jobs", "History"),
+        Binding("H", "toggle_history_range", "Range"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -85,10 +91,8 @@ class SlurmUI(App):
         self.status_bar = Horizontal(self.njobs, self.ngpus, self.timestamp, classes="status_bar")
 
         self.node_table = DataTable(id="node_table")
-        # self.node_table.zebra_stripes = True
         self.job_table = DataTable(id="job_table")
-        # self.job_table.zebra_stripes = True
-        self.active_table = self.job_table
+        self.history_table = DataTable(id="history_table")
 
         self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
         self.info_log.can_focus = False
@@ -97,14 +101,22 @@ class SlurmUI(App):
         self.job_log = RichLog(wrap=True, highlight=True, id="job_log", auto_scroll=False)
         self.job_log_position = None
         
+        self.tables = {
+            "job": self.job_table,
+            "node": self.node_table,
+            "history": self.history_table
+        }
+        self.active_table = "job"
+        
         yield self.header
         yield self.status_bar
-        yield Container(self.job_table, self.node_table, self.info_log, self.job_log)
+        yield Container(self.job_table, self.node_table, self.history_table, self.info_log, self.job_log)
         yield self.footer
 
     def on_mount(self):
-        self.init_job_table()
-        self.init_node_table()
+        self.rewrite_table("job")
+        self.rewrite_table("node")
+        self.rewrite_table("history")
         self.switch_display("job")
 
     def on_ready(self) -> None:
@@ -121,11 +133,11 @@ class SlurmUI(App):
             return False
         elif action == "select_inverse" and self.STAGE['action'] not in ['job', 'select']:
             return False
-        elif action == "refresh" and self.STAGE['action'] not in ['job', 'node', 'job_log']:
+        elif action == "refresh" and self.STAGE['action'] not in ['job', 'history', 'node', 'job_log']:
             return False
         elif action == "confirm" and self.STAGE['action'] != 'delete':
             return False
-        elif action == "sort" and self.STAGE['action'] not in ['job', 'node']:
+        elif action == "sort" and self.STAGE['action'] not in ['job', 'history', 'node']:
             return False
         elif action == "delete" and self.STAGE['action'] not in ['job', 'select']:
             return False
@@ -133,9 +145,13 @@ class SlurmUI(App):
             return False
         elif action == "display_node_list" and self.STAGE['action'] not in ['job', 'node']:
             return False
-        elif action == "display_job_log" and self.STAGE['action'] != 'job':
+        elif action == "display_job_log" and self.STAGE['action'] not in ['job', 'history']:
             return False
-        elif action == "open_with_less" and self.STAGE['action'] not in ['job', 'job_log']:
+        elif action == "open_with_less" and self.STAGE['action'] not in ['job', 'job_log', 'history']:
+            return False
+        elif action == "display_history_jobs" and self.STAGE['action'] not in ['job', 'history']:
+            return False
+        elif action == "toggle_history_range" and self.STAGE['action'] != 'history':
             return False
         return True
 
@@ -157,23 +173,23 @@ class SlurmUI(App):
             self.info_log.write("Select: none")
             self.selected_jobid = []
         self.STAGE['action'] = "job"
-        self.update_job_table()
+        self.update_table("job")
         self.switch_display("job")
-        self.refresh_bindings()
+        self.refresh()
 
     @handle_error
     def action_select(self):
         if (self.STAGE["action"] == "job" and not self.selected_jobid) or self.STAGE["action"] == "select":
-            i = self.active_table.cursor_coordinate[0]
-            value = str(self.active_table.get_cell_at((i, 0)))
+            i = self.tables[self.active_table].cursor_coordinate[0]
+            value = str(self.tables[self.active_table].get_cell_at((i, 0)))
 
             job_id, _ = self._get_selected_job()
             if job_id in self.selected_jobid:
                 self.selected_jobid.remove(job_id)
-                self.active_table.update_cell_at((i, 0), value)
+                self.tables[self.active_table].update_cell_at((i, 0), value)
             else:
                 self.selected_jobid.append(job_id)
-                self.active_table.update_cell_at((i, 0), Text(str(value), style=self.selected_text_style))
+                self.tables[self.active_table].update_cell_at((i, 0), Text(str(value), style=self.selected_text_style))
             
             if self.selected_jobid:
                 self.STAGE["action"] = "select"
@@ -181,22 +197,22 @@ class SlurmUI(App):
             else:
                 self.STAGE["action"] = "job"
                 self.info_log.write(f"Select: none")
-            self.active_table.action_cursor_down()
+            self.tables[self.active_table].action_cursor_down()
         self.refresh_bindings()  
    
     @handle_error
     def action_select_inverse(self):
         assert self.STAGE["action"] in ["job", "select"]
-        for i in range(len(self.active_table.rows)):
-            job_id = str(self.active_table.get_cell_at((i, 0)))
+        for i in range(len(self.tables[self.active_table].rows)):
+            job_id = str(self.tables[self.active_table].get_cell_at((i, 0)))
             
             if job_id in self.selected_jobid:
                 self.selected_jobid.remove(job_id)
-                self.active_table.update_cell_at((i, 0), job_id)
+                self.tables[self.active_table].update_cell_at((i, 0), job_id)
             else:
                 self.selected_jobid.append(job_id)
-                self.active_table.update_cell_at((i, 0), Text(str(job_id), style=self.selected_text_style))
-                self.active_table.move_cursor(row=i, column=0)
+                self.tables[self.active_table].update_cell_at((i, 0), Text(str(job_id), style=self.selected_text_style))
+                self.tables[self.active_table].move_cursor(row=i, column=0)
         if self.selected_jobid:
             self.STAGE["action"] = "select"
             self.info_log.write(f"Select: {' '.join(self.selected_jobid)}")
@@ -213,11 +229,13 @@ class SlurmUI(App):
     @handle_error
     def action_refresh(self):
         if self.STAGE["action"] == "job":
-            self.update_job_table()
+            self.update_table("job")
         elif self.STAGE["action"] == "job_log":
-            self.update_log(self.STAGE["job_id"])
+            self.update_log(self.STAGE["log_fn"])
         elif self.STAGE["action"] == "node":
-            self.update_node_table()
+            self.update_table("node")
+        elif self.STAGE["action"] == "history":
+            self.update_table("history")
         self.update_status()
     
     @handle_error
@@ -227,25 +245,21 @@ class SlurmUI(App):
             perform_scancel(self.STAGE['job_id'])
             self.info_log.write(f"Delete: {self.STAGE['job_id']}? succeeded")
             self.selected_jobid = []
-            self.update_job_table()
+            self.update_table("job")
             self.STAGE["action"] = "job"
         self.refresh_bindings()
 
     @handle_error
     def action_sort(self):
-        sort_column = self.active_table.cursor_column
+        sort_column = self.tables[self.active_table].cursor_column
         if sort_column != self.STAGE[self.STAGE["action"]].get("sort_column"):
             self.STAGE[self.STAGE["action"]]["sort_ascending"] = False
         else:
             self.STAGE[self.STAGE["action"]]["sort_ascending"] = not self.STAGE[self.STAGE["action"]].get("sort_ascending", True)
         self.STAGE[self.STAGE["action"]]['sort_column'] = sort_column
-        if self.STAGE["action"] == "job":
-            self.update_job_table()
-            self.switch_display("job")
-        elif self.STAGE["action"] == "node":
-            self.update_node_table()
-            self.switch_display("node")
-        self.active_table.move_cursor(row=0, column=sort_column)
+
+        self.rewrite_table(self.active_table, keep_state=True)
+        self.tables[self.active_table].move_cursor(row=0, column=sort_column)
     
     @handle_error
     def action_delete(self):
@@ -269,60 +283,125 @@ class SlurmUI(App):
     def action_display_node_list(self):
         if self.STAGE["action"] == "job":
             self.STAGE.update({"action": "node"})
-            self.update_node_table()
+            self.update_table("node")
             self.switch_display("node")
             self.refresh_bindings()
         elif self.STAGE["action"] == "node":
             self.show_all_nodes = not self.show_all_nodes
-            self.update_node_table()
+            self.update_table("node")
+            self.print_node_prompt()
     
     @handle_error
     def action_display_job_log(self):
-        if self.STAGE["action"] == "job":
+        if self.STAGE["action"] in ["job", "history"]:
             job_id, job_name = self._get_selected_job()
-            self.STAGE.update({"action": "job_log", "job_id": job_id, "job_name": job_name})
+            log_fn = self._get_log_fn(job_id)
+            assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
+            self.STAGE.update({"action": "job_log", "job_id": job_id, "log_fn": log_fn, "job_name": job_name})
+            self.update_log(log_fn)
             self.switch_display("job_log")
-            self.update_log(job_id)
         self.refresh_bindings()
     
     @handle_error
     def action_open_with_less(self):
-        if self.STAGE["action"] in ["job", "job_log"]:
+        if self.STAGE["action"] in ["job", "job_log", "history"]:
             job_id, _ = self._get_selected_job()
-            log_fn = get_log_fn(job_id)
+            log_fn = self._get_log_fn(job_id)
+            assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
             with self.suspend():
                 subprocess.run(['less', log_fn])
             self.refresh()
 
+    @handle_error
+    def action_display_history_jobs(self):
+        if self.STAGE["action"] == "job":
+            self.STAGE.update({"action": "history"})
+            self.update_table("history")
+            self.switch_display("history")
+            self.refresh_bindings()
+        elif self.STAGE["action"] == "history":
+            self.show_all_history = not self.show_all_history
+            self.update_table("history")
+            self.print_history_prompt()
+
+    @handle_error
+    def action_toggle_history_range(self):
+        if self.history_range == "1 week":
+            self.history_range = "1 month"
+        elif self.history_range == "1 month":
+            self.history_range = "4 months"
+        elif self.history_range == "4 months":
+            self.history_range = "1 year"
+        else:
+            self.history_range = "1 week"
+        self.update_table("history")
+        self.print_history_prompt()
+    
+    def print_node_prompt(self):
+        info = f"Press 'g' to toggle nodes: {'All' if self.show_all_nodes else 'Available'}"
+        self.info_log.clear()
+        self.info_log.write(info)
+
+    def print_history_prompt(self):
+        info = f"Press 'H' to toggle history range: {self.history_range}\n" \
+        + f"Press 'h' to toggle job state: {'All' if self.show_all_history else 'Completed'}"
+        self.info_log.clear()
+        self.info_log.write(info)
+
+
     def switch_display(self, action):
         if action == "job":
             self.job_table.styles.height = "80%"
-            self.active_table = self.job_table
-            self.active_table.focus()
-
-            self.node_table.styles.height = "0%"
-
-            self.info_log.styles.height="20%"
+            self.active_table = action
+            self.tables[self.active_table].focus()
             self.info_log.styles.border = (self.border_type, self.border_color)
+            self.info_log.styles.height="20%"
+            self.info_log.clear()
+            self.info_log.focus()
 
+            self.history_table.styles.height = "0%"
+            self.node_table.styles.height = "0%"
+            self.job_log.styles.border = (self.border_type, self.border_color)
             self.job_log.styles.height="0%"
-            self.job_log.styles.border = ("none", self.border_color)
             self.job_log.clear()
         elif action == "node":
-            self.job_table.styles.height = "0%"
-
-            self.node_table.styles.height = "100%"
-            self.active_table = self.node_table
-            self.active_table.focus()
-        elif action == "job_log":
-            self.job_table.styles.height="0%"
+            self.node_table.styles.height = "80%"
+            self.active_table = action
+            self.tables[self.active_table].focus()
+            self.info_log.styles.height="20%"
+            self.info_log.styles.border = (self.border_type, self.border_color)
+            self.info_log.clear()
+            self.print_node_prompt()
         
-            self.info_log.styles.height="0%"
-            self.info_log.styles.border = ("none", self.border_color)
-            
+            self.job_table.styles.height = "0%"
+            self.history_table.styles.height = "0%"
+            self.job_log.styles.height="0%"
+            self.job_log.styles.border = (self.border_type, self.border_color)
+            self.job_log.clear()
+        elif action == "job_log":
             self.job_log.styles.height="100%"
             self.job_log.styles.border = (self.border_type, self.border_color)
             self.job_log.focus()
+            
+            self.job_table.styles.height="0%"
+            self.node_table.styles.height="0%"
+            self.history_table.styles.height="0%"
+            self.info_log.styles.height="0%"
+            self.info_log.styles.border = ("none", self.border_color)
+        elif action == "history":
+            self.history_table.styles.height = "80%"
+            self.active_table = action
+            self.tables[self.active_table].focus()
+            self.info_log.styles.height="20%"
+            self.info_log.styles.border = (self.border_type, self.border_color)
+            self.info_log.clear()
+            self.print_history_prompt()
+
+            self.job_table.styles.height = "0%"
+            self.node_table.styles.height = "0%"
+            self.job_log.styles.height="0%"
+            self.job_log.styles.border = (self.border_type, self.border_color)
+            self.job_log.clear()
         else:
             raise ValueError(f"Invalid action: {action}")
 
@@ -337,7 +416,7 @@ class SlurmUI(App):
         self.ngpus.update(f"GPUs: {ngpus_avail}/{ngpus}")
         self.timestamp.update(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    def query_squeue(self, sort_column=None, sort_ascending=True):
+    def query_jobs(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
@@ -347,67 +426,91 @@ class SlurmUI(App):
         return squeue_df
 
     @run_in_thread
-    def init_job_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
-            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
-        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
-            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
+    @handle_error
+    def rewrite_table(self, table_type, keep_state=False):
+        if table_type not in self.STAGE:
+            self.STAGE[table_type] = {}
+        if 'sort_column' in self.STAGE[table_type]:
+            sort_column = self.STAGE[table_type]['sort_column']
+        else:
+            sort_column = None
+        if 'sort_ascending' in self.STAGE[table_type]:
+            sort_ascending = self.STAGE[table_type]['sort_ascending']
+        else:
+            sort_ascending = True
 
-        squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
+        df = self.query_table_data(table_type, sort_column, sort_ascending)
         self.update_status()
 
-        self.job_table.clear()
-        self.job_table.add_columns(*squeue_df.columns)
-        for _, row in squeue_df.iterrows():
-            table_row = [str(row[col]) for col in squeue_df.columns]
-            self.job_table.add_row(*table_row)
+        table = self.tables[table_type]
+        if keep_state:
+            cursor_column = table.cursor_column
+            table.clear()
+            table.move_cursor(row=0, column=cursor_column)
+        else:
+            table.clear(columns=True)
+            table.add_columns(*df.columns)
+        
+        for _, row in df.iterrows():
+            table_row = [str(row[col]) for col in df.columns]
+            table.add_row(*table_row)
 
     @run_in_thread
-    def update_job_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
-            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
-        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
-            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
-            
-        squeue_df = self.query_squeue(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.update_status()
-        
-        # If the table is empty, initialize it
-        if not self.job_table.columns:
-            self.job_table.add_columns(*squeue_df.columns)
-            for _, row in squeue_df.iterrows():
-                table_row = [str(row[col]) for col in squeue_df.columns]
-                self.job_table.add_row(*table_row)
-            return
-        
-        # Update only the cells that have changed
-        for row_index, (_, row) in enumerate(squeue_df.iterrows()):
-            table_row = [str(row[col]) for col in squeue_df.columns]
-            if row_index < len(self.job_table.rows):
-                for col_index, cell in enumerate(table_row):
+    @handle_error
+    def update_table(self, table_type):
+        if 'sort_column' in self.STAGE[table_type]:
+            sort_column = self.STAGE[table_type]['sort_column']
+        else:
+            sort_column = None
+        if 'sort_ascending' in self.STAGE[table_type]:
+            sort_ascending = self.STAGE[table_type]['sort_ascending']
+        else:
+            sort_ascending = True
 
-                    if self.job_table.get_cell_at((row_index, col_index)) != cell:
-                        self.job_table.update_cell_at((row_index, col_index), cell)
+        df = self.query_table_data(table_type, sort_column, sort_ascending)
+        self.update_status()
+
+        table = self.tables[table_type]
+        if not table.columns:
+            table.add_columns(*df.columns)
+            for _, row in df.iterrows():
+                table_row = [str(row[col]) for col in df.columns]
+                table.add_row(*table_row)
+            return
+
+        for row_index, (_, row) in enumerate(df.iterrows()):
+            table_row = [str(row[col]) for col in df.columns]
+            if row_index < len(table.rows):
+                for col_index, cell in enumerate(table_row):
+                    if table.get_cell_at((row_index, col_index)) != cell:
+                        table.update_cell_at((row_index, col_index), cell)
             else:
-                self.job_table.add_row(*table_row)
-        
-        # Remove any extra rows
-        while len(self.job_table.rows) > len(squeue_df):
-            row_key, _ = self.job_table.coordinate_to_cell_key((len(self.job_table.rows) - 1, 0))
-            self.job_table.remove_row(row_key)
+                table.add_row(*table_row)
+
+        while len(table.rows) > len(df):
+            row_key, _ = table.coordinate_to_cell_key((len(table.rows) - 1, 0))
+            table.remove_row(row_key)
+
+    def query_table_data(self, table_type, sort_column=None, sort_ascending=True):
+        if table_type == "job":
+            return self.query_jobs(sort_column, sort_ascending)
+        elif table_type == "node":
+            return self.query_gpus(sort_column, sort_ascending)
+        elif table_type == "history":
+            return self.query_history(sort_column, sort_ascending)
+        else:
+            raise ValueError(f"Invalid table type: {table_type}")
 
     def _get_selected_job(self):
-        row_idx = self.active_table.cursor_row
-        row = self.active_table.get_row_at(row_idx)
+        row_idx = self.tables[self.active_table].cursor_row
+        row = self.tables[self.active_table].get_row_at(row_idx)
         job_id = str(row[0])
         job_name = str(row[2])
         return job_id, job_name
 
     @handle_error
-    def update_log(self, job_id):
-        log_fn = get_log_fn(job_id)
+    def update_log(self, log_fn):
         self.job_log.border_title = f"{log_fn}"
-        self.job_log.border_subtitle = f"{log_fn}"
         current_scroll_y = self.job_log.scroll_offset[1]
 
         if not self.job_log_position:
@@ -431,56 +534,19 @@ class SlurmUI(App):
 
         if update_scroll:
             self.job_log.scroll_end(animate=False)
-
-    @run_in_thread
-    def init_node_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
-            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
-        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
-            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
-
-        overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
-        self.update_status()
-
-        self.node_table.clear()
-        self.node_table.add_columns(*overview_df.columns)
-        for _, row in overview_df.iterrows():
-            table_row = [str(row[col]) for col in overview_df.columns]
-            self.node_table.add_row(*table_row)
     
-    @run_in_thread
-    def update_node_table(self, sort_column=None, sort_ascending=True):
-        if 'sort_column' in self.STAGE[self.STAGE["action"]]:
-            sort_column = self.STAGE[self.STAGE["action"]]['sort_column']
-        if 'sort_ascending' in self.STAGE[self.STAGE["action"]]:
-            sort_ascending = self.STAGE[self.STAGE["action"]]['sort_ascending']
-
-        overview_df = self.query_gpus(sort_column=sort_column, sort_ascending=sort_ascending)
-        
-        # If the table is empty, initialize it
-        if not self.node_table.columns:
-            self.node_table.add_columns(*overview_df.columns)
-            for _, row in overview_df.iterrows():
-                table_row = [str(row[col]) for col in overview_df.columns]
-                self.node_table.add_row(*table_row)
-            return
-        
-        # Update only the cells that have changed
-        for row_index, (_, row) in enumerate(overview_df.iterrows()):
-            table_row = [str(row[col]) for col in overview_df.columns]
-            if row_index < len(self.node_table.rows):
-                for col_index, cell in enumerate(table_row):
-                    if self.node_table.get_cell_at((row_index, col_index)) != cell:
-                        self.node_table.update_cell_at((row_index, col_index), cell)
-            else:
-                self.node_table.add_row(*table_row)
-        
-        # Remove any extra rows
-        while len(self.node_table.rows) > len(overview_df):
-            row_key, _ = self.node_table.coordinate_to_cell_key((len(self.node_table.rows) - 1, 0))
-            self.node_table.remove_row(row_key)
-        
-        self.update_status()
+    @handle_error
+    def _get_log_fn(self, job_id):
+        if self.STAGE["action"] == "history":
+            response_string = subprocess.check_output(f"""sacct -j {job_id} --format=StdOut -P""", shell=True).decode("utf-8")
+            formatted_string = response_string.split("\n")[1].strip()
+            formatted_string = formatted_string.replace("%j", job_id)
+        elif self.STAGE["action"] in ["job", "job_log"]:
+            response_string = subprocess.check_output(f"""scontrol show job {job_id} | grep StdOut""", shell=True).decode("utf-8")
+            formatted_string = response_string.split("=")[-1].strip()
+        else:
+            raise ValueError(f"Cannot get log file for action: {self.STAGE['action']}")
+        return formatted_string
 
     def query_gpus(self,  sort_column=None, sort_ascending=True):
         overview_df = get_sinfo(self.cluster)
@@ -494,6 +560,28 @@ class SlurmUI(App):
             # filter out nodes with no available GPUs
             overview_df = overview_df[overview_df["#Avail"] > 0]
         return overview_df
+
+    def query_history(self, sort_column=None, sort_ascending=True):
+        starttime = self.get_history_starttime()
+        sacct_df = get_sacct(starttime=starttime)
+        if sort_column is not None:
+            sacct_df = sacct_df.sort_values(sacct_df.columns[sort_column], ascending=sort_ascending)
+        
+        if not self.show_all_history:
+            sacct_df = sacct_df[sacct_df["State"] == "COMPLETED"]
+        return sacct_df
+
+    def get_history_starttime(self):
+        if self.history_range == "1 week":
+            return (datetime.now() - timedelta(weeks=1)).strftime('%Y-%m-%d')
+        elif self.history_range == "1 month":
+            return (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        elif self.history_range == "4 months":
+            return (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
+        elif self.history_range == "1 year":
+            return (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        else:
+            return "2024-11-26"
 
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
@@ -657,10 +745,29 @@ def get_job_gpu_ids(job_id):
         return "N/A"
     return formatted_string
 
-def get_log_fn(job_id):
-    response_string = subprocess.check_output(f"""scontrol show job {job_id} | grep StdOut""", shell=True).decode("utf-8")
-    formatted_string = response_string.split("=")[-1].strip()
-    return formatted_string
+def get_sacct(starttime="2024-11-26", endtime="now"):
+    sep = "|"
+    response_string = subprocess.check_output(
+        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
+        shell=True
+    ).decode("utf-8")
+    data = io.StringIO(response_string)
+    df = pd.read_csv(data, sep=sep)
+
+    # Strip whitespace from column names
+    df.columns = df.columns.str.strip()
+
+    # Strip whitespace from each string element in the DataFrame
+    for col in df.select_dtypes(['object']).columns:
+        df[col] = df[col].str.strip()
+    
+    # Filter to keep only the main job entries
+    df = df[~df['JobID'].str.contains(r'\.')]
+
+    # Filter out entries where StdOut is NaN (interactive jobs)
+    df = df[df['StdOut'].notna()]
+
+    return df
 
 def read_log(fn, num_lines=100):
     with open(os.path.expanduser(fn), 'r') as f:
