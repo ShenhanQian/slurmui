@@ -2,9 +2,11 @@
 
 Enhanced terminal UI for slurm. Derived from [SlurmUI](https://github.com/SirWyver/slurmui).
 
-- Job management
-- GPU monitor
-- Log monitor
+Viewing and managing
+- GPUs
+- Jobs in the history
+- Jobs in the queue
+- Logs for current and past jobs
 
 <div align="center"> 
   <img src="demo.png">
@@ -29,8 +31,8 @@ Optional arguments:
 | Cluster | Argument | Comment |
 |-|-|-|
 | [TUM CVG](https://cvg.cit.tum.de/) | | Works with the default setting. |
-| [TUM VCG](https://www.niessnerlab.org/) | `-c tum_vcg` | Format of GRES is different. |
-| [LRZ AI](https://doku.lrz.de/lrz-ai-systems-11484278.html) | `-c lrz_ai` | Need to filter out irrelavant partitions. |
+| [TUM VCG](https://www.niessnerlab.org/) | `-c tum_vcg` | Formats of Gres and GresUsed are different. |
+| [LRZ AI](https://doku.lrz.de/lrz-ai-systems-11484278.html) | `-c lrz_ai` | Formats of Gres and GresUsed are different. |
 
 For other clusters, you can first try running `slurmui` without arguments. If failed, you will need to add if-else sentences for your special cases. 
 

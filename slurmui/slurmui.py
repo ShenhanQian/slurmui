@@ -2,8 +2,8 @@ import io
 import importlib.metadata
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Header, Footer, Static, RichLog, DataTable
-from textual.containers import Container, Horizontal
+from textual.widgets import Header, Footer, RichLog, DataTable, Tabs, Tab, LoadingIndicator
+from textual.containers import Container
 from rich.text import Text
 import subprocess
 import pandas as pd
@@ -12,6 +12,7 @@ import os
 import threading
 from functools import wraps
 from datetime import datetime, timedelta
+import time
 
 
 DEBUG = False
@@ -40,6 +41,7 @@ def handle_error(func):
 
 class SlurmUI(App):
     # configuration that can be set from the command line
+    verbose = False
     cluster = None
     interval = 10
     history_range = "1 week"  # Default history range
@@ -50,6 +52,10 @@ class SlurmUI(App):
         "job": {
             "sort_column": 0,
             "sort_ascending": True,
+        },
+        "history": {
+            "sort_column": 0,
+            "sort_ascending": False,
         },
     }
     stats = {}
@@ -66,6 +72,9 @@ class SlurmUI(App):
     TITLE = f"SlurmUI (v{importlib.metadata.version('slurmui')})"
 
     BINDINGS = [
+        Binding("g", "display_nodes", "GPUs"),
+        Binding("h", "display_history_jobs", "History"),
+        Binding("j", "display_jobs", "Jobs"),
         Binding("q", "abort_quit", "Quit"),
         Binding("space", "select", "Select"),
         Binding("v", "select_inverse", "Inverse"),
@@ -74,25 +83,32 @@ class SlurmUI(App):
         Binding("s", "sort", "Sort"),
         Binding("d", "delete", "Delete"),
         Binding("G", "print_gpustat", "GPU"),
-        Binding("g", "display_node_list", "Nodes"),
         Binding("l", "display_job_log", "Log"),
         Binding("L", "open_with_less", "Open with less"),
-        Binding("h", "display_history_jobs", "History"),
         Binding("H", "toggle_history_range", "Range"),
     ]
 
     def compose(self) -> ComposeResult:
         self.header = Header()
         self.footer = Footer()
+        self.loading_indicator = LoadingIndicator()
 
-        self.njobs = Static("Jobs: ")
-        self.ngpus = Static("GPUs:")
-        self.timestamp = Static(":::")
-        self.status_bar = Horizontal(self.njobs, self.ngpus, self.timestamp, classes="status_bar")
+        self.tab_nodes = Tab("GPUs", id="node")
+        self.tab_history = Tab("History", id="history")
+        self.tab_jobs = Tab("Jobs", id="job")
+        self.tab_time = Tab("Time", id="time", disabled=True, classes="time-tab")
+        self.tabs = Tabs(self.tab_nodes, self.tab_history, self.tab_jobs, self.tab_time, id="tabs")
+        self.tabs.can_focus = False
 
         self.node_table = DataTable(id="node_table")
         self.job_table = DataTable(id="job_table")
         self.history_table = DataTable(id="history_table")
+        self.tables = {
+            "job": self.job_table,
+            "node": self.node_table,
+            "history": self.history_table
+        }
+        self.active_table = "job"
 
         self.info_log = RichLog(wrap=True, highlight=True, id="info_log", auto_scroll=True)
         self.info_log.can_focus = False
@@ -101,33 +117,43 @@ class SlurmUI(App):
         self.job_log = RichLog(wrap=True, highlight=True, id="job_log", auto_scroll=False)
         self.job_log_position = None
         
-        self.tables = {
-            "job": self.job_table,
-            "node": self.node_table,
-            "history": self.history_table
-        }
-        self.active_table = "job"
         
         yield self.header
-        yield self.status_bar
-        yield Container(self.job_table, self.node_table, self.history_table, self.info_log, self.job_log)
+        yield self.tabs
+        yield Container(self.loading_indicator, self.job_table, self.node_table, self.history_table, self.info_log, self.job_log)
         yield self.footer
 
     def on_mount(self):
+        pass
+
+    def on_ready(self) -> None:
         self.rewrite_table("job")
         self.rewrite_table("node")
         self.rewrite_table("history")
-        self.switch_display("job")
-
-    def on_ready(self) -> None:
+        self.tabs.active = 'job'
         if self.interval > 0:
             self.set_interval(self.interval, self.auto_refresh)
-    
+
+    def on_tabs_tab_activated(self, message):
+        tab_id = message.tab.id
+        if self.verbose:
+            self.info_log.write(f"Tab activated: {tab_id}")
+
+        self.STAGE.update({"action": tab_id})
+        self.update_table(tab_id)
+        self.switch_display(tab_id)
+        self.refresh_bindings()
+        
+    @handle_error
     def check_action(self, action: str, parameters):  
         """Check if an action may run."""
-        # self.info_log.write(f"Action: {action}")
-
-        if action == "abort_quit":
+        if action == "display_nodes" and self.STAGE['action'] not in ['node', 'history', 'job']:
+            return False
+        elif action == "display_history_jobs" and self.STAGE['action'] not in ['node', 'history', 'job']:
+            return False
+        elif action == "display_jobs" and self.STAGE['action'] not in ['node', 'history', 'job']:
+            return False
+        elif action == "abort_quit":
             pass
         elif action == "select" and self.STAGE['action'] not in ['job', 'select']:
             return False
@@ -143,21 +169,64 @@ class SlurmUI(App):
             return False
         elif action == "print_gpustat" and self.STAGE['action'] != 'job':
             return False
-        elif action == "display_node_list" and self.STAGE['action'] not in ['job', 'node']:
-            return False
         elif action == "display_job_log" and self.STAGE['action'] not in ['job', 'history']:
             return False
         elif action == "open_with_less" and self.STAGE['action'] not in ['job', 'job_log', 'history']:
-            return False
-        elif action == "display_history_jobs" and self.STAGE['action'] not in ['job', 'history']:
             return False
         elif action == "toggle_history_range" and self.STAGE['action'] != 'history':
             return False
         return True
 
     @handle_error
+    def action_display_nodes(self):
+        if self.STAGE[self.active_table]['updating']:
+            return
+        if not self.verbose:
+            self.info_log.clear()
+        if self.STAGE["action"] in ["history", "job"]:
+            self.STAGE.update({"action": "node"})
+            self.update_table("node")
+            self.refresh_bindings()
+            self.tabs.active = "node"
+        elif self.STAGE["action"] == "node":
+            self.show_all_nodes = not self.show_all_nodes
+            self.rewrite_table("node", keep_state=True)
+            self.switch_display("node")
+
+    @handle_error
+    def action_display_history_jobs(self):
+        if self.STAGE[self.active_table]['updating']:
+            return
+        if not self.verbose:
+            self.info_log.clear()
+        if self.STAGE["action"] in ["node", "job"]:
+            self.STAGE.update({"action": "history"})
+            self.update_table("history")
+            self.refresh_bindings()
+            self.tabs.active = "history"
+        elif self.STAGE["action"] == "history":
+            self.show_all_history = not self.show_all_history
+            self.rewrite_table("history", keep_state=True)
+            self.switch_display("history")
+    
+    @handle_error
+    def action_display_jobs(self):
+        if self.STAGE[self.active_table]['updating']:
+            return
+        if not self.verbose:
+            self.info_log.clear()
+        if self.STAGE["action"] in ["node", "history"]:
+            self.STAGE.update({"action": "job"})
+            self.update_table("job")
+            self.refresh_bindings()
+            self.tabs.active = "job"
+        elif self.STAGE["action"] == "job":
+            self.refresh_bindings()
+            self.switch_display("job")
+
+    @handle_error
     def action_abort_quit(self):
-        if self.STAGE["action"] == "job":
+        if self.STAGE["action"] in ["job"]:
             self.exit(0)
         else:
             self.action_abort()
@@ -172,9 +241,12 @@ class SlurmUI(App):
         elif self.STAGE["action"] == "select":
             self.info_log.write("Select: none")
             self.selected_jobid = []
-        self.STAGE['action'] = "job"
-        self.update_table("job")
-        self.switch_display("job")
+        elif self.STAGE["action"] in ["node", "history"]:
+            self.tabs.active = "job"
+        action = self.tabs.active
+        self.STAGE['action'] = action
+        self.update_table(action)
+        self.switch_display(action)
         self.refresh()
 
     @handle_error
@@ -234,8 +306,8 @@ class SlurmUI(App):
             self.update_log(self.STAGE["log_fn"])
         elif self.STAGE["action"] == "node":
             self.update_table("node")
-        elif self.STAGE["action"] == "history":
-            self.update_table("history")
+        # elif self.STAGE["action"] == "history":
+        #     self.update_table("history")
         self.update_status()
     
     @handle_error
@@ -278,18 +350,6 @@ class SlurmUI(App):
             job_id, _ = self._get_selected_job()
             gpustat = subprocess.check_output(f"""srun --jobid {job_id} gpustat""", shell=True, timeout=3).decode("utf-8").rstrip()
             self.info_log.write(gpustat)
-
-    @handle_error
-    def action_display_node_list(self):
-        if self.STAGE["action"] == "job":
-            self.STAGE.update({"action": "node"})
-            self.update_table("node")
-            self.switch_display("node")
-            self.refresh_bindings()
-        elif self.STAGE["action"] == "node":
-            self.show_all_nodes = not self.show_all_nodes
-            self.update_table("node")
-            self.print_node_prompt()
     
     @handle_error
     def action_display_job_log(self):
@@ -305,27 +365,23 @@ class SlurmUI(App):
     @handle_error
     def action_open_with_less(self):
         if self.STAGE["action"] in ["job", "job_log", "history"]:
-            job_id, _ = self._get_selected_job()
-            log_fn = self._get_log_fn(job_id)
+            if 'log_fn' not in self.STAGE:
+                if 'job_id' not in self.STAGE:
+                    job_id, _ = self._get_selected_job()
+                else:
+                    job_id = self.STAGE['job_id']
+                log_fn = self._get_log_fn(job_id)
+            else:
+                log_fn = self.STAGE['log_fn']
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
             with self.suspend():
                 subprocess.run(['less', log_fn])
             self.refresh()
 
     @handle_error
-    def action_display_history_jobs(self):
-        if self.STAGE["action"] == "job":
-            self.STAGE.update({"action": "history"})
-            self.update_table("history")
-            self.switch_display("history")
-            self.refresh_bindings()
-        elif self.STAGE["action"] == "history":
-            self.show_all_history = not self.show_all_history
-            self.update_table("history")
-            self.print_history_prompt()
-
-    @handle_error
     def action_toggle_history_range(self):
+        if self.STAGE[self.active_table]['updating']:
+            return
         if self.history_range == "1 week":
             self.history_range = "1 month"
         elif self.history_range == "1 month":
@@ -334,49 +390,63 @@ class SlurmUI(App):
             self.history_range = "1 year"
         else:
             self.history_range = "1 week"
-        self.update_table("history")
-        self.print_history_prompt()
+        self.rewrite_table("history", keep_state=True)
+        self.switch_display("history")
     
-    def print_node_prompt(self):
-        info = f"Press 'g' to toggle nodes: {'All' if self.show_all_nodes else 'Available'}"
-        self.info_log.clear()
-        self.info_log.write(info)
+    def print_tab_prompt(self, tab_id):
+        if not self.verbose:
+            self.info_log.clear()
 
-    def print_history_prompt(self):
-        info = f"Press 'H' to toggle history range: {self.history_range}\n" \
-        + f"Press 'h' to toggle job state: {'All' if self.show_all_history else 'Completed'}"
-        self.info_log.clear()
+        if tab_id == "node":
+            info = f"Press 'g' to toggle nodes: {'All' if self.show_all_nodes else 'Available'}"
+        elif tab_id == "history":
+            info = f"Press 'h' to toggle job state: {'All' if self.show_all_history else 'Completed'}\n" \
+            + f"Press 'H' to toggle history range: {self.history_range}"
+        elif tab_id == "job":
+            info = ""
         self.info_log.write(info)
-
 
     def switch_display(self, action):
-        if action == "job":
-            self.job_table.styles.height = "80%"
-            self.active_table = action
-            self.tables[self.active_table].focus()
-            self.info_log.styles.border = (self.border_type, self.border_color)
-            self.info_log.styles.height="20%"
-            self.info_log.clear()
-            self.info_log.focus()
-
-            self.history_table.styles.height = "0%"
-            self.node_table.styles.height = "0%"
-            self.job_log.styles.border = (self.border_type, self.border_color)
-            self.job_log.styles.height="0%"
-            self.job_log.clear()
-        elif action == "node":
+        if self.verbose:
+            self.info_log.write(f"Switch display: {action}")
+        if action == "node":
             self.node_table.styles.height = "80%"
             self.active_table = action
             self.tables[self.active_table].focus()
             self.info_log.styles.height="20%"
             self.info_log.styles.border = (self.border_type, self.border_color)
-            self.info_log.clear()
-            self.print_node_prompt()
+            self.print_tab_prompt(action)
         
             self.job_table.styles.height = "0%"
             self.history_table.styles.height = "0%"
             self.job_log.styles.height="0%"
             self.job_log.styles.border = (self.border_type, self.border_color)
+            self.job_log.clear()
+        elif action == "history":
+            self.history_table.styles.height = "80%"
+            self.active_table = action
+            self.tables[self.active_table].focus()
+            self.info_log.styles.height="20%"
+            self.info_log.styles.border = (self.border_type, self.border_color)
+            self.print_tab_prompt(action)
+
+            self.job_table.styles.height = "0%"
+            self.node_table.styles.height = "0%"
+            self.job_log.styles.height="0%"
+            self.job_log.styles.border = (self.border_type, self.border_color)
+            self.job_log.clear()
+        elif action == "job":
+            self.job_table.styles.height = "80%"
+            self.active_table = action
+            self.tables[self.active_table].focus()
+            self.info_log.styles.border = (self.border_type, self.border_color)
+            self.info_log.styles.height="20%"
+            self.print_tab_prompt(action)
+
+            self.history_table.styles.height = "0%"
+            self.node_table.styles.height = "0%"
+            self.job_log.styles.border = (self.border_type, self.border_color)
+            self.job_log.styles.height="0%"
             self.job_log.clear()
         elif action == "job_log":
             self.job_log.styles.height="100%"
@@ -388,34 +458,29 @@ class SlurmUI(App):
             self.history_table.styles.height="0%"
             self.info_log.styles.height="0%"
             self.info_log.styles.border = ("none", self.border_color)
-        elif action == "history":
-            self.history_table.styles.height = "80%"
-            self.active_table = action
-            self.tables[self.active_table].focus()
-            self.info_log.styles.height="20%"
-            self.info_log.styles.border = (self.border_type, self.border_color)
-            self.info_log.clear()
-            self.print_history_prompt()
-
-            self.job_table.styles.height = "0%"
-            self.node_table.styles.height = "0%"
-            self.job_log.styles.height="0%"
-            self.job_log.styles.border = (self.border_type, self.border_color)
-            self.job_log.clear()
         else:
             raise ValueError(f"Invalid action: {action}")
 
     @run_in_thread
+    @handle_error
     def update_status(self):
-        ngpus_avail = self.stats.get("ngpus_avail", 0)
-        ngpus = self.stats.get("ngpus", 0)
+        self.title = f"SlurmUI (v{importlib.metadata.version('slurmui')})"
+
         njobs = self.stats.get("njobs", 0)
         njobs_running = self.stats.get("njobs_running", 0)
+        self.tab_jobs.label = f"Jobs: {njobs_running}/{njobs}"
 
-        self.njobs.update(f"Jobs: {njobs_running}/{njobs}")
-        self.ngpus.update(f"GPUs: {ngpus_avail}/{ngpus}")
-        self.timestamp.update(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        ngpus_avail = self.stats.get("ngpus_avail", 0)
+        ngpus = self.stats.get("ngpus", 0)
+        self.tab_nodes.label = f"GPUs: {ngpus_avail}/{ngpus}"
 
+        nhistory = self.stats.get("nhistory", 0)
+        nhistory_completed = self.stats.get("nhistory_completed", 0)
+        self.tab_history.label = f"History: {nhistory_completed}/{nhistory}"
+        
+        self.tab_time.label = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+    @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
         squeue_df = get_squeue() 
         if sort_column is not None:
@@ -430,6 +495,11 @@ class SlurmUI(App):
     def rewrite_table(self, table_type, keep_state=False):
         if table_type not in self.STAGE:
             self.STAGE[table_type] = {}
+        if self.STAGE[table_type].get('updating', False):
+            return
+        self.STAGE[table_type]['updating'] = True
+        self.table_loading()
+
         if 'sort_column' in self.STAGE[table_type]:
             sort_column = self.STAGE[table_type]['sort_column']
         else:
@@ -455,9 +525,27 @@ class SlurmUI(App):
             table_row = [str(row[col]) for col in df.columns]
             table.add_row(*table_row)
 
+        time.sleep(0.1)
+        self.STAGE[table_type]['updating'] = False
+        self.table_loaded()
+    
+    @handle_error
+    def table_loading(self):
+        self.loading_indicator.remove_class("hide")
+        self.tables[self.active_table].add_class("hide")
+
+    @handle_error
+    def table_loaded(self):
+        self.loading_indicator.add_class("hide")
+        self.tables[self.active_table].focus()
+        self.tables[self.active_table].remove_class("hide")
+
     @run_in_thread
     @handle_error
     def update_table(self, table_type):
+        if self.STAGE[table_type].get('updating', False):
+            return
+        self.STAGE[table_type]['updating'] = True
         if 'sort_column' in self.STAGE[table_type]:
             sort_column = self.STAGE[table_type]['sort_column']
         else:
@@ -490,7 +578,9 @@ class SlurmUI(App):
         while len(table.rows) > len(df):
             row_key, _ = table.coordinate_to_cell_key((len(table.rows) - 1, 0))
             table.remove_row(row_key)
+        self.STAGE[table_type]['updating'] = False
 
+    @handle_error
     def query_table_data(self, table_type, sort_column=None, sort_ascending=True):
         if table_type == "job":
             return self.query_jobs(sort_column, sort_ascending)
@@ -501,6 +591,7 @@ class SlurmUI(App):
         else:
             raise ValueError(f"Invalid table type: {table_type}")
 
+    @handle_error
     def _get_selected_job(self):
         row_idx = self.tables[self.active_table].cursor_row
         row = self.tables[self.active_table].get_row_at(row_idx)
@@ -548,6 +639,7 @@ class SlurmUI(App):
             raise ValueError(f"Cannot get log file for action: {self.STAGE['action']}")
         return formatted_string
 
+    @handle_error
     def query_gpus(self,  sort_column=None, sort_ascending=True):
         overview_df = get_sinfo(self.cluster)
         if sort_column is not None:
@@ -561,16 +653,22 @@ class SlurmUI(App):
             overview_df = overview_df[overview_df["#Avail"] > 0]
         return overview_df
 
+    @handle_error
     def query_history(self, sort_column=None, sort_ascending=True):
         starttime = self.get_history_starttime()
         sacct_df = get_sacct(starttime=starttime)
         if sort_column is not None:
             sacct_df = sacct_df.sort_values(sacct_df.columns[sort_column], ascending=sort_ascending)
         
+        self.stats['nhistory'] = len(sacct_df)
+
         if not self.show_all_history:
             sacct_df = sacct_df[sacct_df["State"] == "COMPLETED"]
+
+        self.stats['nhistory_completed'] = len(sacct_df)
         return sacct_df
 
+    @handle_error
     def get_history_starttime(self):
         if self.history_range == "1 week":
             return (datetime.now() - timedelta(weeks=1)).strftime('%Y-%m-%d')
@@ -650,29 +748,7 @@ def get_sinfo(cluster):
     if DEBUG:
         response_string = SINFO_DEBUG
     else:
-        if cluster == 'lrz_ai':
-            response_string = ""
-            partitions = [
-                # "",  # only keep this line if you want to see all partitions
-                "-p 'mcml-dgx-a100-40x8'",
-                "-p 'mcml-hgx-a100-80x4'",
-                "-p 'mcml-hgx-h100-92x4'",
-                "-p 'lrz-dgx-a100-80x8'", 
-                "-p 'lrz-hgx-a100-80x4'", 
-                "-p 'lrz-hgx-h100-92x4'",
-                # "-p 'lrz-dgx-1-v100x8'", 
-                # "-p 'lrz-dgx-1-p100x8'", 
-                # "-p 'lrz-hpe-p100x4'", 
-                # "-p 'lrz-v100x2'",
-            ]
-            for p in partitions:
-                s = subprocess.check_output(f"""sinfo --Node {p} -O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")  # WARNING: insufficient width for any item can crash the prgram
-                if len(response_string) > 0:
-                    response_string += remove_first_line(s)
-                else:
-                    response_string += s
-        else:
-            response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
+        response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,CPUsState'""", shell=True).decode("utf-8")
 
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
@@ -714,10 +790,10 @@ def get_sinfo(cluster):
     return overview_df
 
 def get_squeue():
+    sep = "|"
     if DEBUG:
         response_string = SQUEUE_DEBUG
     else:
-        sep = "|"
         response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%.20P{sep}%.200j{sep}%.8T{sep}%.10M{sep}%.6l{sep}%.S{sep}%.10u{sep}%Q{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
@@ -764,8 +840,9 @@ def get_sacct(starttime="2024-11-26", endtime="now"):
     # Filter to keep only the main job entries
     df = df[~df['JobID'].str.contains(r'\.')]
 
-    # Filter out entries where StdOut is NaN (interactive jobs)
-    df = df[df['StdOut'].notna()]
+    # Filter out entries where Start or StdOut is NaN (interactive jobs)
+    df = df.dropna(subset=['Start', 'StdOut'])
+
 
     return df
 
@@ -775,14 +852,16 @@ def read_log(fn, num_lines=100):
     
     return txt_lines
 
-def run_ui(debug=False, cluster=None, interval=10):
-    if debug:
-        # global for quick debugging
-        global DEBUG
-        DEBUG = True
+def run_ui(verbose=False, cluster=None, interval=10, history_range="1 week"):
+    # if debug:
+    #     # global for quick debugging
+    #     global DEBUG
+    #     DEBUG = True
     app = SlurmUI()
+    app.verbose = verbose
     app.cluster = cluster
     app.interval = interval
+    app.history_range = history_range
     app.run()
 
 
