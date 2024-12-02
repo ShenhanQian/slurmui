@@ -35,7 +35,7 @@ def handle_error(func):
         try:
             return func(self, *args, **kwargs)
         except Exception as e:
-            self.info_log.write(str(e))
+            os.system(f"echo {e}")
     return wrapper
 
 
@@ -50,12 +50,16 @@ class SlurmUI(App):
     STAGE = {
         "action": "job",
         "job": {
-            "sort_column": 0,
-            "sort_ascending": True,
+            # "sort_column": 0,
+            # "sort_ascending": True,
         },
         "history": {
             "sort_column": 0,
             "sort_ascending": False,
+        },
+        "node": {
+            # "sort_column": 0,
+            # "sort_ascending": True,
         },
     }
     stats = {}
@@ -236,8 +240,12 @@ class SlurmUI(App):
         if self.STAGE["action"] == "delete":
             self.info_log.write("Delete: aborted")
             self.selected_jobid = []
+            self.STAGE.pop("job_id", None)
+            self.STAGE.pop("job_name", None)
         elif self.STAGE["action"] == "job_log":
             self.job_log_position = None
+            self.STAGE.pop("job_id", None)
+            self.STAGE.pop("job_name", None)
         elif self.STAGE["action"] == "select":
             self.info_log.write("Select: none")
             self.selected_jobid = []
@@ -303,7 +311,7 @@ class SlurmUI(App):
         if self.STAGE["action"] == "job":
             self.update_table("job")
         elif self.STAGE["action"] == "job_log":
-            self.update_log(self.STAGE["log_fn"])
+            self.update_log(self.STAGE["job_id"])
         elif self.STAGE["action"] == "node":
             self.update_table("node")
         # elif self.STAGE["action"] == "history":
@@ -357,22 +365,19 @@ class SlurmUI(App):
             job_id, job_name = self._get_selected_job()
             log_fn = self._get_log_fn(job_id)
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
-            self.STAGE.update({"action": "job_log", "job_id": job_id, "log_fn": log_fn, "job_name": job_name})
-            self.update_log(log_fn)
+            self.STAGE.update({"action": "job_log", "job_id": job_id, "job_name": job_name})
+            self.update_log(job_id)
             self.switch_display("job_log")
         self.refresh_bindings()
     
     @handle_error
     def action_open_with_less(self):
         if self.STAGE["action"] in ["job", "job_log", "history"]:
-            if 'log_fn' not in self.STAGE:
-                if 'job_id' not in self.STAGE:
-                    job_id, _ = self._get_selected_job()
-                else:
-                    job_id = self.STAGE['job_id']
-                log_fn = self._get_log_fn(job_id)
+            if 'job_id' not in self.STAGE:
+                job_id, _ = self._get_selected_job()
             else:
-                log_fn = self.STAGE['log_fn']
+                job_id = self.STAGE['job_id']
+            log_fn = self._get_log_fn(job_id)
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
             with self.suspend():
                 subprocess.run(['less', log_fn])
@@ -600,7 +605,8 @@ class SlurmUI(App):
         return job_id, job_name
 
     @handle_error
-    def update_log(self, log_fn):
+    def update_log(self, job_id):
+        log_fn = self._get_log_fn(job_id)
         self.job_log.border_title = f"{log_fn}"
         current_scroll_y = self.job_log.scroll_offset[1]
 
