@@ -830,7 +830,7 @@ def get_job_gpu_ids(job_id):
 def get_sacct(starttime="2024-11-26", endtime="now"):
     sep = "|"
     response_string = subprocess.check_output(
-        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
+        f"""sacct --format="JobID,JobName%200,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
         shell=True
     ).decode("utf-8")
     data = io.StringIO(response_string)
@@ -843,9 +843,6 @@ def get_sacct(starttime="2024-11-26", endtime="now"):
     for col in df.select_dtypes(['object']).columns:
         df[col] = df[col].str.strip()
     
-    # Filter to keep only the main job entries
-    df = df[~df['JobID'].str.contains(r'\.')]
-
     # Filter out entries where Start or StdOut is NaN (interactive jobs)
     df = df.dropna(subset=['Start', 'StdOut'])
 
