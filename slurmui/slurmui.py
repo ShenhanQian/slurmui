@@ -13,6 +13,7 @@ import threading
 from functools import wraps
 from datetime import datetime, timedelta
 import time
+import socket
 
 
 DEBUG = False
@@ -95,7 +96,6 @@ class SlurmUI(App):
     def compose(self) -> ComposeResult:
         self.header = Header()
         self.footer = Footer()
-        self.loading_indicator = LoadingIndicator()
 
         self.tab_nodes = Tab("GPUs", id="node")
         self.tab_history = Tab("History", id="history")
@@ -124,7 +124,7 @@ class SlurmUI(App):
         
         yield self.header
         yield self.tabs
-        yield Container(self.loading_indicator, self.job_table, self.node_table, self.history_table, self.info_log, self.job_log)
+        yield Container(self.job_table, self.node_table, self.history_table, self.info_log, self.job_log)
         yield self.footer
 
     def on_mount(self):
@@ -483,7 +483,7 @@ class SlurmUI(App):
         nhistory_completed = self.stats.get("nhistory_completed", 0)
         self.tab_history.label = f"History: {nhistory_completed}/{nhistory}"
         
-        self.tab_time.label = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        self.tab_time.label = f"{socket.gethostname()} | {datetime.now().strftime('%H:%M:%S')}"
 
     @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
@@ -503,7 +503,6 @@ class SlurmUI(App):
         if self.STAGE[table_type].get('updating', False):
             return
         self.STAGE[table_type]['updating'] = True
-        self.table_loading()
 
         if 'sort_column' in self.STAGE[table_type]:
             sort_column = self.STAGE[table_type]['sort_column']
@@ -532,18 +531,6 @@ class SlurmUI(App):
 
         time.sleep(0.1)
         self.STAGE[table_type]['updating'] = False
-        self.table_loaded()
-    
-    @handle_error
-    def table_loading(self):
-        self.loading_indicator.remove_class("hide")
-        self.tables[self.active_table].add_class("hide")
-
-    @handle_error
-    def table_loaded(self):
-        self.loading_indicator.add_class("hide")
-        self.tables[self.active_table].focus()
-        self.tables[self.active_table].remove_class("hide")
 
     @run_in_thread
     @handle_error
