@@ -66,7 +66,7 @@ class SlurmUI(App):
     stats = {}
     selected_jobid = []
     show_all_nodes = False
-    show_all_history = False
+    show_all_history = True
 
     theme = "textual-dark"
     selected_text_style = "bold on orange3"
