@@ -2,7 +2,7 @@ import io
 import importlib.metadata
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Header, Footer, RichLog, DataTable, Tabs, Tab, LoadingIndicator
+from textual.widgets import Header, Footer, RichLog, DataTable, Tabs, Tab
 from textual.containers import Container
 from rich.text import Text
 import subprocess
@@ -487,7 +487,7 @@ class SlurmUI(App):
 
     @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
-        squeue_df = get_squeue() 
+        squeue_df = get_squeue(self.cluster) 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
 
@@ -786,12 +786,12 @@ def get_sinfo(cluster):
     overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
     return overview_df
 
-def get_squeue():
+def get_squeue(cluster=None):
     sep = "|"
     if DEBUG:
         response_string = SQUEUE_DEBUG
     else:
-        response_string = subprocess.check_output(f"""squeue --format="%.18i{sep}%.20P{sep}%.200j{sep}%.8T{sep}%.10M{sep}%.6l{sep}%.S{sep}%.10u{sep}%Q{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
+        response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=sep)
@@ -803,12 +803,38 @@ def get_squeue():
     for col in df.select_dtypes(['object']).columns:
         df[col] = df[col].str.strip()
     
+    if "NODELIST(REASON)" in df.columns:
+        df.rename(columns={"NODELIST(REASON)": "NODELIST"}, inplace=True)
+
+    # right align time
+    max_length = df["TIME"].str.len().max()
+    df.loc[:, ["TIME"]] = df.loc[:, "TIME"].apply(lambda x: f"{x:>{max_length}}")
+    
+    # remove years from start time
+    df.loc[:, ["START_TIME"]] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
+    
+    # remove seconds from time limit
+    max_length = df["TIME_LIMIT"].str.len().max()
+    df.loc[:, ["TIME_LIMIT"]] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
+    
     # Add allocated GPU IDs
-    df["GPU_IDS"] = "N/A"
     mask = (df["PARTITION"] != "in") & (df["STATE"] == "RUNNING")
     if mask.any():
-        df.loc[mask, "GPU_IDS"] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gpu_ids(x))
+        if cluster == "tum_cvg":
+            df["Device"] = "N/A"
+            df.loc[mask, ["Device"]] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gres(x))
+        else:
+            df["GPU_IDs"] = "N/A"
+            df.loc[mask, "GPU_IDs"] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gpu_ids(x))
     return df 
+
+def simplify_start_time(start_time):
+    try:
+        if start_time != "nan":
+            start_time = datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%S").strftime("%m-%d %H:%M")
+    except Exception as e:
+        pass
+    return start_time
 
 def get_job_gpu_ids(job_id):
     try:
@@ -818,14 +844,20 @@ def get_job_gpu_ids(job_id):
         return "N/A"
     return formatted_string
 
+def get_job_gres(job_id):
+    response_string = subprocess.check_output(f"""scontrol show jobid -dd {job_id} | grep JOB_GRES""", shell=True).decode("utf-8")
+    pattern = r"gpu:([^,]+)"
+    matches = re.findall(pattern, response_string)
+    job_gres = ",".join(matches)  # Join extracted parts with a comma
+    return job_gres
+
 def get_sacct(starttime="2024-11-26", endtime="now"):
-    sep = "|"
     response_string = subprocess.check_output(
-        f"""sacct --format="JobID,JobName%200,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
+        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
         shell=True
     ).decode("utf-8")
     data = io.StringIO(response_string)
-    df = pd.read_csv(data, sep=sep)
+    df = pd.read_csv(data, sep='|')
 
     # Strip whitespace from column names
     df.columns = df.columns.str.strip()
@@ -836,8 +868,6 @@ def get_sacct(starttime="2024-11-26", endtime="now"):
     
     # Filter out entries where Start or StdOut is NaN (interactive jobs)
     df = df.dropna(subset=['Start', 'StdOut'])
-
-
     return df
 
 def read_log(fn, num_lines=100):

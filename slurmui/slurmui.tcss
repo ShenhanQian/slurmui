@@ -31,12 +31,3 @@ Tab {
     text-style: none;
     color: $foreground;
 }
-
-LoadingIndicator {
-    height: 80%;
-}
-
-.hide {
-    display: none;
-    height: 0%;
-}
