@@ -67,6 +67,7 @@ class SlurmUI(App):
     selected_jobid = []
     show_all_nodes = False
     show_all_history = True
+    show_all_jobs = False
 
     theme = "textual-dark"
     selected_text_style = "bold on orange3"
@@ -185,8 +186,6 @@ class SlurmUI(App):
     def action_display_nodes(self):
         if self.STAGE[self.active_table]['updating']:
             return
-        if not self.verbose:
-            self.info_log.clear()
         if self.STAGE["action"] in ["history", "job"]:
             self.STAGE.update({"action": "node"})
             self.update_table("node")
@@ -201,8 +200,6 @@ class SlurmUI(App):
     def action_display_history_jobs(self):
         if self.STAGE[self.active_table]['updating']:
             return
-        if not self.verbose:
-            self.info_log.clear()
         if self.STAGE["action"] in ["node", "job"]:
             self.STAGE.update({"action": "history"})
             self.update_table("history")
@@ -217,14 +214,14 @@ class SlurmUI(App):
     def action_display_jobs(self):
         if self.STAGE[self.active_table]['updating']:
             return
-        if not self.verbose:
-            self.info_log.clear()
         if self.STAGE["action"] in ["node", "history"]:
             self.STAGE.update({"action": "job"})
             self.update_table("job")
             self.refresh_bindings()
             self.tabs.active = "job"
         elif self.STAGE["action"] == "job":
+            self.show_all_jobs = not self.show_all_jobs
+            self.rewrite_table("job", keep_state=True)
             self.refresh_bindings()
             self.switch_display("job")
 
@@ -301,13 +298,9 @@ class SlurmUI(App):
             self.info_log.write(f"Select: none")
         self.refresh_bindings()  
     
-    @handle_error
-    def auto_refresh(self):
-        self.action_refresh()
-
     @run_in_thread
     @handle_error
-    def action_refresh(self):
+    def auto_refresh(self):
         if self.STAGE["action"] == "job":
             self.update_table("job")
         elif self.STAGE["action"] == "job_log":
@@ -316,6 +309,18 @@ class SlurmUI(App):
             self.update_table("node")
         # elif self.STAGE["action"] == "history":
         #     self.update_table("history")
+        self.update_status()
+
+    @handle_error
+    def action_refresh(self):
+        if self.STAGE["action"] == "job":
+            self.rewrite_table("job", keep_state=True)
+        elif self.STAGE["action"] == "job_log":
+            self.update_log(self.STAGE["job_id"])
+        elif self.STAGE["action"] == "node":
+            self.rewrite_table("node", keep_state=True)
+        elif self.STAGE["action"] == "history":
+            self.rewrite_table("history", keep_state=True)
         self.update_status()
     
     @handle_error
@@ -405,10 +410,10 @@ class SlurmUI(App):
         if tab_id == "node":
             info = f"Press 'g' to toggle nodes: {'All' if self.show_all_nodes else 'Available'}"
         elif tab_id == "history":
-            info = f"Press 'h' to toggle job state: {'All' if self.show_all_history else 'Completed'}\n" \
+            info = f"Press 'h' to toggle job states: {'All' if self.show_all_history else 'Complete'}\t| " \
             + f"Press 'H' to toggle history range: {self.history_range}"
         elif tab_id == "job":
-            info = ""
+            info = f"Press 'j' to toggle users: {'All' if self.show_all_jobs else 'Me'}"
         self.info_log.write(info)
 
     def switch_display(self, action):
@@ -487,7 +492,7 @@ class SlurmUI(App):
 
     @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
-        squeue_df = get_squeue(self.cluster) 
+        squeue_df = get_squeue(self.cluster, self.show_all_jobs) 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
 
@@ -786,12 +791,15 @@ def get_sinfo(cluster):
     overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
     return overview_df
 
-def get_squeue(cluster=None):
+def get_squeue(cluster=None, show_all_jobs=False):
     sep = "|"
     if DEBUG:
         response_string = SQUEUE_DEBUG
     else:
-        response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
+        if show_all_jobs:
+            response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" -S T""", shell=True).decode("utf-8")
+        else:
+            response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
     formatted_string = re.sub(' +', ' ', response_string)
     data = io.StringIO(formatted_string)
     df = pd.read_csv(data, sep=sep)
@@ -823,6 +831,11 @@ def get_squeue(cluster=None):
         if cluster == "tum_cvg":
             df["Device"] = "N/A"
             df.loc[mask, ["Device"]] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gres(x))
+            # Reorder columns to make "Device" the second to last column
+            columns = list(df.columns)
+            columns.remove("Device")
+            columns.insert(-2, "Device")
+            df = df[columns]
         else:
             df["GPU_IDs"] = "N/A"
             df.loc[mask, "GPU_IDs"] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gpu_ids(x))
