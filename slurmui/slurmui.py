@@ -828,17 +828,13 @@ def get_squeue(cluster=None, show_all_jobs=False):
     # Add allocated GPU IDs
     mask = (df["PARTITION"] != "in") & (df["STATE"] == "RUNNING")
     if mask.any():
-        if cluster == "tum_cvg":
-            df["Device"] = "N/A"
-            df.loc[mask, ["Device"]] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gres(x))
-            # Reorder columns to make "Device" the second to last column
-            columns = list(df.columns)
-            columns.remove("Device")
-            columns.insert(-2, "Device")
-            df = df[columns]
-        else:
-            df["GPU_IDs"] = "N/A"
-            df.loc[mask, "GPU_IDs"] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gpu_ids(x))
+        df["GRES"] = "N/A"
+        df.loc[mask, ["GRES"]] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gres(x))
+        # Reorder columns to make "GRES" the second to last column
+        columns = list(df.columns)
+        columns.remove("GRES")
+        columns.insert(-2, "GRES")
+        df = df[columns]
     return df 
 
 def simplify_start_time(start_time):
