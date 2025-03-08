@@ -260,7 +260,7 @@ class SlurmUI(App):
             i = self.tables[self.active_table].cursor_coordinate[0]
             value = str(self.tables[self.active_table].get_cell_at((i, 0)))
 
-            job_id, _ = self._get_selected_job()
+            job_id = self._get_selected_job()
             if job_id in self.selected_jobid:
                 self.selected_jobid.remove(job_id)
                 self.tables[self.active_table].update_cell_at((i, 0), value)
@@ -304,7 +304,7 @@ class SlurmUI(App):
         if self.STAGE["action"] == "job":
             self.update_table("job")
         elif self.STAGE["action"] == "job_log":
-            self.update_log(self.STAGE["job_id"])
+            self.update_log(self.STAGE["log_fn"])
         elif self.STAGE["action"] == "node":
             self.update_table("node")
         # elif self.STAGE["action"] == "history":
@@ -316,7 +316,7 @@ class SlurmUI(App):
         if self.STAGE["action"] == "job":
             self.rewrite_table("job", keep_state=True)
         elif self.STAGE["action"] == "job_log":
-            self.update_log(self.STAGE["job_id"])
+            self.update_log(self.STAGE["log_fn"])
         elif self.STAGE["action"] == "node":
             self.rewrite_table("node", keep_state=True)
         elif self.STAGE["action"] == "history":
@@ -349,9 +349,9 @@ class SlurmUI(App):
     @handle_error
     def action_delete(self):
         if self.STAGE["action"] == "job":
-            job_id, job_name = self._get_selected_job()
+            job_id = self._get_selected_job()
             self.info_log.write(f"Delete: {job_id}? press <<ENTER>> to confirm")
-            self.STAGE.update({"action": "delete", "job_id": job_id, "job_name": job_name})
+            self.STAGE.update({"action": "delete", "job_id": job_id})
         elif self.STAGE["action"] == "select":
             self.info_log.write(f"Delete: {' '.join(self.selected_jobid)}? press <<ENTER>> to confirm")
             self.STAGE.update({"action": "delete", "job_id": ' '.join(self.selected_jobid)})
@@ -360,29 +360,29 @@ class SlurmUI(App):
     @handle_error
     def action_print_gpustat(self):
         if self.STAGE["action"] == "job":
-            job_id, _ = self._get_selected_job()
+            job_id = self._get_selected_job()
             gpustat = subprocess.check_output(f"""srun --jobid {job_id} gpustat""", shell=True, timeout=3).decode("utf-8").rstrip()
             self.info_log.write(gpustat)
     
     @handle_error
     def action_display_job_log(self):
         if self.STAGE["action"] in ["job", "history"]:
-            job_id, job_name = self._get_selected_job()
+            job_id = self._get_selected_job()
             log_fn = self._get_log_fn(job_id)
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
-            self.STAGE.update({"action": "job_log", "job_id": job_id, "job_name": job_name})
-            self.update_log(job_id)
+            self.STAGE.update({"action": "job_log", "log_fn": log_fn})
+            self.update_log(log_fn)
             self.switch_display("job_log")
         self.refresh_bindings()
     
     @handle_error
     def action_open_with_less(self):
         if self.STAGE["action"] in ["job", "job_log", "history"]:
-            if 'job_id' not in self.STAGE:
-                job_id, _ = self._get_selected_job()
+            if 'log_fn' not in self.STAGE:
+                job_id = self._get_selected_job()
+                log_fn = self._get_log_fn(job_id)
             else:
-                job_id = self.STAGE['job_id']
-            log_fn = self._get_log_fn(job_id)
+                log_fn = self.STAGE['log_fn']
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
             with self.suspend():
                 subprocess.run(['less', log_fn])
@@ -593,12 +593,10 @@ class SlurmUI(App):
         row_idx = self.tables[self.active_table].cursor_row
         row = self.tables[self.active_table].get_row_at(row_idx)
         job_id = str(row[0])
-        job_name = str(row[2])
-        return job_id, job_name
+        return job_id
 
     @handle_error
-    def update_log(self, job_id):
-        log_fn = self._get_log_fn(job_id)
+    def update_log(self, log_fn):
         self.job_log.border_title = f"{log_fn}"
         current_scroll_y = self.job_log.scroll_offset[1]
 
