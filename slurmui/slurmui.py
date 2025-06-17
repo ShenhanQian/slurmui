@@ -243,6 +243,7 @@ class SlurmUI(App):
             self.job_log_position = None
             self.STAGE.pop("job_id", None)
             self.STAGE.pop("job_name", None)
+            self.STAGE.pop("log_fn", None)
         elif self.STAGE["action"] == "select":
             self.info_log.write("Select: none")
             self.selected_jobid = []
