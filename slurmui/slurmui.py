@@ -14,6 +14,7 @@ from functools import wraps
 from datetime import datetime, timedelta
 import time
 import socket
+import signal
 
 
 DEBUG = False
@@ -81,7 +82,7 @@ class SlurmUI(App):
         Binding("g", "display_nodes", "GPUs"),
         Binding("h", "display_history_jobs", "History"),
         Binding("j", "display_jobs", "Jobs"),
-        Binding("q", "abort_quit", "Quit"),
+        Binding("q", "abort", "Abort"),
         Binding("space", "select", "Select"),
         Binding("v", "select_inverse", "Inverse"),
         Binding("r", "refresh", "Refresh"),
@@ -158,7 +159,7 @@ class SlurmUI(App):
             return False
         elif action == "display_jobs" and self.STAGE['action'] not in ['node', 'history', 'job']:
             return False
-        elif action == "abort_quit":
+        elif action == "abort":
             pass
         elif action == "select" and self.STAGE['action'] not in ['job', 'select']:
             return False
@@ -224,13 +225,6 @@ class SlurmUI(App):
             self.rewrite_table("job", keep_state=True)
             self.refresh_bindings()
             self.switch_display("job")
-
-    @handle_error
-    def action_abort_quit(self):
-        if self.STAGE["action"] in ["job"]:
-            self.exit(0)
-        else:
-            self.action_abort()
 
     @handle_error
     def action_abort(self):
@@ -386,7 +380,13 @@ class SlurmUI(App):
                 log_fn = self.STAGE['log_fn']
             assert os.path.exists(log_fn), f"Log file not found: {log_fn}"
             with self.suspend():
-                subprocess.run(['less', log_fn])
+                # Save the current SIGINT handler
+                original_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+                try:
+                    subprocess.run(['less', '+G', log_fn])
+                finally:
+                    # Restore the original SIGINT handler
+                    signal.signal(signal.SIGINT, original_sigint)
             self.refresh()
 
     @handle_error
