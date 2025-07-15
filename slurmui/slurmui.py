@@ -525,15 +525,21 @@ class SlurmUI(App):
         table = self.tables[table_type]
         if keep_state:
             cursor_column = table.cursor_column
-            table.clear()
-            table.move_cursor(row=0, column=cursor_column)
+            cursor_row = table.cursor_row
         else:
-            table.clear(columns=True)
-            table.add_columns(*df.columns)
+            cursor_column = 0
+            cursor_row = 0
+
+        table.clear(columns=True)
+        table.add_columns(*df.columns)
         
         for _, row in df.iterrows():
             table_row = [str(row[col]) for col in df.columns]
             table.add_row(*table_row)
+
+        cursor_row = min(cursor_row, len(table.rows) - 1)
+        cursor_column = min(cursor_column, len(table.columns) - 1)
+        table.move_cursor(row=cursor_row, column=cursor_column)
 
         time.sleep(0.1)
         self.STAGE[table_type]['updating'] = False
@@ -795,45 +801,41 @@ def get_squeue(cluster=None, show_all_jobs=False):
     if DEBUG:
         response_string = SQUEUE_DEBUG
     else:
-        if show_all_jobs:
-            response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" -S T""", shell=True).decode("utf-8")
-        else:
-            response_string = subprocess.check_output(f"""squeue --format="%18i{sep}%10u{sep}%20P{sep}%200j{sep}%8T{sep}%10M{sep}%S{sep}%l{sep}%.4D{sep}%R" --me -S T""", shell=True).decode("utf-8")
-    formatted_string = re.sub(' +', ' ', response_string)
-    data = io.StringIO(formatted_string)
+        args = f"{sep},".join([
+            "JOBID:18",
+            "USERNAME:10",
+            "PARTITION:40",
+            "NAME:200",
+            "STATE:8",
+            "TimeUsed:10",
+            "StartTime:30",
+            "TimeLimit:15",
+            "tres-alloc:100",
+            "NumNodes:5",
+            "ReasonList:100",
+        ])
+        query_string = f"""squeue --Format="{args}" -S T"""
+
+        if not show_all_jobs:
+            query_string += " --me"
+        response_string = subprocess.check_output(query_string, shell=True).decode("utf-8")
+    compact_string = re.sub(' +', '', response_string)
+    data = io.StringIO(compact_string)
     df = pd.read_csv(data, sep=sep)
-
-    # Strip whitespace from column names
-    df.columns = df.columns.str.strip()
-
-    # Strip whitespace from each string element in the DataFrame
-    for col in df.select_dtypes(['object']).columns:
-        df[col] = df[col].str.strip()
-    
-    if "NODELIST(REASON)" in df.columns:
-        df.rename(columns={"NODELIST(REASON)": "NODELIST"}, inplace=True)
 
     # right align time
     max_length = df["TIME"].str.len().max()
-    df.loc[:, ["TIME"]] = df.loc[:, "TIME"].apply(lambda x: f"{x:>{max_length}}")
+    df.loc[:, "TIME"] = df.loc[:, "TIME"].apply(lambda x: f"{x:>{max_length}}")
     
     # remove years from start time
-    df.loc[:, ["START_TIME"]] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
+    df.loc[:, "START_TIME"] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
     
     # remove seconds from time limit
     max_length = df["TIME_LIMIT"].str.len().max()
-    df.loc[:, ["TIME_LIMIT"]] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
-    
-    # Add allocated GPU IDs
-    mask = (df["PARTITION"] != "in") & (df["STATE"] == "RUNNING")
-    if mask.any():
-        df["GRES"] = "N/A"
-        df.loc[mask, ["GRES"]] = df.loc[mask, "JOBID"].apply(lambda x: get_job_gres(x))
-        # Reorder columns to make "GRES" the second to last column
-        columns = list(df.columns)
-        columns.remove("GRES")
-        columns.insert(-2, "GRES")
-        df = df[columns]
+    df.loc[:, "TIME_LIMIT"] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
+
+    # simplify tres
+    df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
     return df 
 
 def simplify_start_time(start_time):
@@ -844,20 +846,15 @@ def simplify_start_time(start_time):
         pass
     return start_time
 
-def get_job_gpu_ids(job_id):
-    try:
-        response_string = subprocess.check_output(f"""scontrol show jobid -dd {job_id} | grep GRES""", shell=True).decode("utf-8")
-        formatted_string = response_string.split(":")[-1].strip()[:-1]
-    except:
-        return "N/A"
-    return formatted_string
-
-def get_job_gres(job_id):
-    response_string = subprocess.check_output(f"""scontrol show jobid -dd {job_id} | grep JOB_GRES""", shell=True).decode("utf-8")
-    pattern = r"gpu:([^,]+)"
-    matches = re.findall(pattern, response_string)
-    job_gres = ",".join(matches)  # Join extracted parts with a comma
-    return job_gres
+def simplify_tres(tres):
+    tres_ = ""
+    for x in str(tres).split(","):
+        if 'gres/gpu=' in x:
+            tres_ = x.replace("gres/", "")
+        if 'gres/gpu:' in x:
+            tres_ = x.replace("gres/", "")
+            break  # higher priority than 'gres/gpu='
+    return tres_
 
 def get_sacct(starttime="2024-11-26", endtime="now"):
     response_string = subprocess.check_output(
