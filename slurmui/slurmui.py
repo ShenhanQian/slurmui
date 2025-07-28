@@ -493,7 +493,7 @@ class SlurmUI(App):
 
     @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
-        squeue_df = get_squeue(self.cluster, self.show_all_jobs) 
+        squeue_df = self.get_squeue(self.cluster, self.show_all_jobs) 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
 
@@ -644,7 +644,7 @@ class SlurmUI(App):
 
     @handle_error
     def query_gpus(self,  sort_column=None, sort_ascending=True):
-        overview_df = get_sinfo(self.cluster)
+        overview_df = self.get_sinfo(self.cluster)
         self.stats['ngpus'] = overview_df["GPUs (Total)"].sum()
         self.stats['ngpus_avail'] = overview_df["GPUs (Avail)"].sum()
         if not self.show_all_nodes:
@@ -682,161 +682,172 @@ class SlurmUI(App):
             return (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         else:
             return "2024-11-26"
+    
+    @handle_error
+    def get_squeue(self, cluster=None, show_all_jobs=False):
+        sep = "|"
+        if DEBUG:
+            response_string = SQUEUE_DEBUG
+        else:
+            args = f"{sep},".join([
+                "JOBID:18",
+                "USERNAME:10",
+                "PARTITION:40",
+                "NAME:200",
+                "STATE:8",
+                "TimeUsed:10",
+                "StartTime:30",
+                "TimeLimit:15",
+                "tres-alloc:100",
+                "ReasonList:100",
+            ])
+            query_string = f"""squeue --Format="{args}" -S T"""
+            if self.verbose:
+                self.info_log.write(query_string)
+
+            if not show_all_jobs:
+                query_string += " --me"
+            response_string = subprocess.check_output(query_string, shell=True).decode("utf-8")
+        compact_string = re.sub(' +', '', response_string)
+        data = io.StringIO(compact_string)
+        df = pd.read_csv(data, sep=sep)
+
+        # right align time
+        max_length = df["TIME"].str.len().max()
+        df.loc[:, "TIME"] = df.loc[:, "TIME"].apply(lambda x: f"{x:>{max_length}}")
+        
+        # remove years from start time
+        df.loc[:, "START_TIME"] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
+        
+        # remove seconds from time limit
+        max_length = df["TIME_LIMIT"].str.len().max()
+        df.loc[:, "TIME_LIMIT"] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
+
+        # simplify tres
+        df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
+        return df 
+    
+    @handle_error
+    def get_sinfo(self, cluster):
+        if DEBUG:
+            response_string = SINFO_DEBUG
+        else:
+            query_string = f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,Memory,CPUsState'"""
+            if self.verbose:
+                self.info_log.write(query_string)
+
+            response_string = subprocess.check_output(query_string, shell=True).decode("utf-8")
+
+        formatted_string = re.sub(' +', ' ', response_string)
+        data = io.StringIO(formatted_string)
+        df = pd.read_csv(data, sep=" ")
+        overview_df = [ ]# pd.DataFrame(columns=['Host', "Device", "GPUs (Avail)", "GPUs (Total)", "Free IDX"])
+        for row in df.iterrows():
+            node_available = row[1]["STATE"] in ["mix", "idle", "alloc"]
+
+            if row[1]['GRES'] != "(null)":
+                host_info = self.parse_gres(row[1]['GRES'], cluster)
+            else:
+                continue
+
+            host_avail_info = self.parse_gres_used(row[1]['GRES_USED'], host_info["GPUs (Total)"], cluster)
+            host_info.update(host_avail_info)
+            if not node_available:
+                host_info["GPUs (Avail)"] = 0
+                host_info["Free IDX"] = []
+            else:
+                host_info["GPUs (Avail)"] = host_info['GPUs (Total)'] - host_info["GPUs (Avail)"]
+            host_info["GPUs"] = f"{host_info['GPUs (Avail)']}/{host_info['GPUs (Total)']}"
+            
+            try:
+                host_info['Mem (Avail)'] = int(row[1]["FREE_MEM"]) // 1024
+            except:
+                host_info['Mem (Avail)'] = row[1]["FREE_MEM"]
+            try:
+                host_info['Mem (Total)'] = int(row[1]["MEMORY"]) // 1024
+            except:
+                host_info['Mem (Total)'] = row[1]["MEMORY"]
+            host_info['Mem (GB)'] = f"{host_info['Mem (Avail)']}/{host_info['Mem (Total)']}"
+
+            cpu_info = row[1]["CPUS(A/I/O/T)"].split("/")
+            host_info['CPUs (Avail)'] = cpu_info[1]
+            host_info['CPUs (Total)'] = cpu_info[3]
+            host_info['CPUs'] = f"{host_info['CPUs (Avail)']}/{host_info['CPUs (Total)']}"
+
+            host_info['Host'] = str(row[1]["HOSTNAMES"])
+            host_info['Partition'] = str(row[1]["PARTITION"])
+            host_info['State'] = str(row[1]["STATE"])
+
+            overview_df.append(host_info)
+        overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
+        return overview_df
+    
+    @handle_error
+    def parse_gres_used(self, gres_used_str, num_total, cluster=None):
+        try:
+            device = ""
+            alloc_str = "N/A"
+            if cluster == "lrz_ai":
+                try:
+                    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
+                except:
+                    _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
+            elif cluster == "tum_vcg":
+                _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\),.*", gres_used_str).groups()
+            else:
+                _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
+            
+            num_gpus = int(num_gpus)
+        except Exception as e:
+            self.info_log.write(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
+            self.info_log.write(e)
+            raise ValueError(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
+
+        alloc_gpus = []
+        for gpu_ids in alloc_str.split(","):
+            if "-" in gpu_ids:
+                start, end = gpu_ids.split("-")
+                for i in range(int(start), int(end)+1):
+                    alloc_gpus.append(i)
+            else:
+                if gpu_ids == "N/A":
+                    pass
+                else:
+                    alloc_gpus.append(int(gpu_ids))
+                
+        return {"Device": device,
+                "GPUs (Avail)": num_gpus,
+                "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
+
+    def parse_gres(self, gres_str, cluster=None):
+        try:
+            device = ""
+            if cluster == "tum_vcg":
+                _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
+            elif cluster == "lrz_ai":
+                try:
+                    _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
+                except:
+                    _, num_gpus = re.match("(.*):(.*)", gres_str).groups()
+            else:
+                _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
+
+            num_gpus = int(num_gpus)
+        except Exception as e:
+            self.info_log.write(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
+            self.info_log.write(e)
+            raise ValueError(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
+        
+        return {"Device": device,
+                "GPUs (Total)": num_gpus}
+
 
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
 
-def parse_gres_used(gres_used_str, num_total, cluster=None):
-    try:
-        device = ""
-        alloc_str = "N/A"
-        if cluster == "lrz_ai":
-            try:
-                _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
-            except:
-                _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
-        elif cluster == "tum_vcg":
-            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\),.*", gres_used_str).groups()
-        else:
-            _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
-        
-        num_gpus = int(num_gpus)
-    except Exception as e:
-        print(e)
-        raise ValueError(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
-
-    alloc_gpus = []
-    for gpu_ids in alloc_str.split(","):
-        if "-" in gpu_ids:
-            start, end = gpu_ids.split("-")
-            for i in range(int(start), int(end)+1):
-                alloc_gpus.append(i)
-        else:
-            if gpu_ids == "N/A":
-                pass
-            else:
-                alloc_gpus.append(int(gpu_ids))
-            
-    return {"Device": device,
-            "GPUs (Avail)": num_gpus,
-            "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
-
-def parse_gres(gres_str, cluster=None):
-    try:
-        device = ""
-        if cluster == "tum_vcg":
-            _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
-        elif cluster == "lrz_ai":
-            try:
-                _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
-            except:
-                _, num_gpus = re.match("(.*):(.*)", gres_str).groups()
-        else:
-            _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
-
-        num_gpus = int(num_gpus)
-    except Exception as e:
-        print(e)
-        raise ValueError(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
-    
-    return {"Device": device,
-            "GPUs (Total)": num_gpus}
-
 def remove_first_line(input_string):
     lines = input_string.split('\n')
     return '\n'.join(lines[1:])
-
-def get_sinfo(cluster):
-    if DEBUG:
-        response_string = SINFO_DEBUG
-    else:
-        response_string = subprocess.check_output(f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,Memory,CPUsState'""", shell=True).decode("utf-8")
-
-    formatted_string = re.sub(' +', ' ', response_string)
-    data = io.StringIO(formatted_string)
-    df = pd.read_csv(data, sep=" ")
-    overview_df = [ ]# pd.DataFrame(columns=['Host', "Device", "GPUs (Avail)", "GPUs (Total)", "Free IDX"])
-    for row in df.iterrows():
-        node_available = row[1]["STATE"] in ["mix", "idle", "alloc"]
-
-        if row[1]['GRES'] != "(null)":
-            host_info = parse_gres(row[1]['GRES'], cluster)
-        else:
-            continue
-
-        host_avail_info = parse_gres_used(row[1]['GRES_USED'], host_info["GPUs (Total)"], cluster)
-        host_info.update(host_avail_info)
-        if not node_available:
-            host_info["GPUs (Avail)"] = 0
-            host_info["Free IDX"] = []
-        else:
-            host_info["GPUs (Avail)"] = host_info['GPUs (Total)'] - host_info["GPUs (Avail)"]
-        host_info["GPUs"] = f"{host_info['GPUs (Avail)']}/{host_info['GPUs (Total)']}"
-        
-        try:
-            host_info['Mem (Avail)'] = int(row[1]["FREE_MEM"]) // 1024
-        except:
-            host_info['Mem (Avail)'] = row[1]["FREE_MEM"]
-        try:
-            host_info['Mem (Total)'] = int(row[1]["MEMORY"]) // 1024
-        except:
-            host_info['Mem (Total)'] = row[1]["MEMORY"]
-        host_info['Mem (GB)'] = f"{host_info['Mem (Avail)']}/{host_info['Mem (Total)']}"
-
-        cpu_info = row[1]["CPUS(A/I/O/T)"].split("/")
-        host_info['CPUs (Avail)'] = cpu_info[1]
-        host_info['CPUs (Total)'] = cpu_info[3]
-        host_info['CPUs'] = f"{host_info['CPUs (Avail)']}/{host_info['CPUs (Total)']}"
-
-        host_info['Host'] = str(row[1]["HOSTNAMES"])
-        host_info['Partition'] = str(row[1]["PARTITION"])
-        host_info['State'] = str(row[1]["STATE"])
-
-        overview_df.append(host_info)
-    overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
-    return overview_df
-
-def get_squeue(cluster=None, show_all_jobs=False):
-    sep = "|"
-    if DEBUG:
-        response_string = SQUEUE_DEBUG
-    else:
-        args = f"{sep},".join([
-            "JOBID:18",
-            "USERNAME:10",
-            "PARTITION:40",
-            "NAME:200",
-            "STATE:8",
-            "TimeUsed:10",
-            "StartTime:30",
-            "TimeLimit:15",
-            "tres-alloc:100",
-            "NumNodes:5",
-            "ReasonList:100",
-        ])
-        query_string = f"""squeue --Format="{args}" -S T"""
-
-        if not show_all_jobs:
-            query_string += " --me"
-        response_string = subprocess.check_output(query_string, shell=True).decode("utf-8")
-    compact_string = re.sub(' +', '', response_string)
-    data = io.StringIO(compact_string)
-    df = pd.read_csv(data, sep=sep)
-
-    # right align time
-    max_length = df["TIME"].str.len().max()
-    df.loc[:, "TIME"] = df.loc[:, "TIME"].apply(lambda x: f"{x:>{max_length}}")
-    
-    # remove years from start time
-    df.loc[:, "START_TIME"] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
-    
-    # remove seconds from time limit
-    max_length = df["TIME_LIMIT"].str.len().max()
-    df.loc[:, "TIME_LIMIT"] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
-
-    # simplify tres
-    df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
-    return df 
 
 def simplify_start_time(start_time):
     try:
@@ -847,14 +858,12 @@ def simplify_start_time(start_time):
     return start_time
 
 def simplify_tres(tres):
-    tres_ = ""
+    tres_ = []
     for x in str(tres).split(","):
-        if 'gres/gpu=' in x:
-            tres_ = x.replace("gres/", "")
-        if 'gres/gpu:' in x:
-            tres_ = x.replace("gres/", "")
-            break  # higher priority than 'gres/gpu='
-    return tres_
+        if 'billing=' in x:
+            continue
+        tres_.append(x)
+    return ",".join(tres_)
 
 def get_sacct(starttime="2024-11-26", endtime="now"):
     response_string = subprocess.check_output(
