@@ -858,7 +858,7 @@ def simplify_tres(tres):
 
 def get_sacct(starttime="2024-11-26", endtime="now"):
     response_string = subprocess.check_output(
-        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P --starttime={starttime} --endtime={endtime}""",
+        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P -X --starttime={starttime} --endtime={endtime}""",
         shell=True
     ).decode("utf-8")
     data = io.StringIO(response_string)
@@ -870,9 +870,6 @@ def get_sacct(starttime="2024-11-26", endtime="now"):
     # Strip whitespace from each string element in the DataFrame
     for col in df.select_dtypes(['object']).columns:
         df[col] = df[col].str.strip()
-    
-    # Filter out entries where Start or StdOut is NaN (interactive jobs)
-    df = df.dropna(subset=['Start', 'StdOut'])
     return df
 
 def read_log(fn, num_lines=100):
