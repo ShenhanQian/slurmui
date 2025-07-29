@@ -542,7 +542,7 @@ class SlurmUI(App):
         cursor_column = min(cursor_column, len(table.columns) - 1)
         table.move_cursor(row=cursor_row, column=cursor_column)
 
-        time.sleep(0.1)
+        time.sleep(0.3)
         self.STAGE[table_type]['updating'] = False
 
     @run_in_thread
@@ -583,6 +583,7 @@ class SlurmUI(App):
         while len(table.rows) > len(df):
             row_key, _ = table.coordinate_to_cell_key((len(table.rows) - 1, 0))
             table.remove_row(row_key)
+
         self.STAGE[table_type]['updating'] = False
 
     @handle_error
