@@ -659,7 +659,7 @@ class SlurmUI(App):
     @handle_error
     def query_history(self, sort_column=None, sort_ascending=True):
         starttime = self.get_history_starttime()
-        sacct_df = get_sacct(starttime=starttime)
+        sacct_df = self.get_sacct(starttime=starttime)
         if sort_column is not None:
             sacct_df = sacct_df.sort_values(sacct_df.columns[sort_column], ascending=sort_ascending)
         
@@ -830,6 +830,27 @@ class SlurmUI(App):
                 "GPUs (Avail)": num_gpus,
                 "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
 
+    @handle_error
+    def get_sacct(self, starttime="2024-11-26", endtime="now"):
+        query_string = f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,AllocTRES,Partition,StdOut" -P -X --starttime={starttime} --endtime={endtime}"""
+        if self.verbose:
+            self.info_log.write(query_string)
+
+        response_string = subprocess.check_output(
+            query_string,
+            shell=True
+        ).decode("utf-8")
+        data = io.StringIO(response_string)
+        df = pd.read_csv(data, sep='|')
+
+        # Strip whitespace from column names
+        df.columns = df.columns.str.strip()
+
+        # Strip whitespace from each string element in the DataFrame
+        for col in df.select_dtypes(['object']).columns:
+            df[col] = df[col].str.strip()
+        return df
+
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
 
@@ -852,22 +873,6 @@ def simplify_tres(tres):
             continue
         tres_.append(x)
     return ",".join(tres_)
-
-def get_sacct(starttime="2024-11-26", endtime="now"):
-    response_string = subprocess.check_output(
-        f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,Partition,StdOut" -P -X --starttime={starttime} --endtime={endtime}""",
-        shell=True
-    ).decode("utf-8")
-    data = io.StringIO(response_string)
-    df = pd.read_csv(data, sep='|')
-
-    # Strip whitespace from column names
-    df.columns = df.columns.str.strip()
-
-    # Strip whitespace from each string element in the DataFrame
-    for col in df.select_dtypes(['object']).columns:
-        df[col] = df[col].str.strip()
-    return df
 
 def read_log(fn, num_lines=100):
     with open(os.path.expanduser(fn), 'r') as f:
