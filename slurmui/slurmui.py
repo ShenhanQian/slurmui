@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import io
 import importlib.metadata
 from textual.app import App, ComposeResult
@@ -652,7 +653,10 @@ class SlurmUI(App):
         if not self.show_all_nodes:
             # filter out nodes with no available GPUs
             overview_df = overview_df[overview_df["GPUs (Avail)"] > 0]
-        overview_df = overview_df[['Partition', 'Host', "Device", "State", "Mem (GB)", "CPUs", "GPUs", "Free IDX"]]
+        
+        # hide columns for simplicity
+        overview_df = overview_df.drop(columns=["GPUs (Total)", "GPUs (Avail)"])
+        
         if sort_column is not None:
             overview_df = overview_df.sort_values(overview_df.columns[sort_column],ascending=sort_ascending)
         return overview_df
@@ -734,7 +738,7 @@ class SlurmUI(App):
         if DEBUG:
             response_string = SINFO_DEBUG
         else:
-            query_string = f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,Memory,CPUsState'"""
+            query_string = f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,Memory,CPUsState,Features:200'"""
             if self.verbose:
                 self.info_log.write(query_string)
 
@@ -743,42 +747,65 @@ class SlurmUI(App):
         formatted_string = re.sub(' +', ' ', response_string)
         data = io.StringIO(formatted_string)
         df = pd.read_csv(data, sep=" ")
-        overview_df = [ ]# pd.DataFrame(columns=['Host', "Device", "GPUs (Avail)", "GPUs (Total)", "Free IDX"])
+        overview_df = []
         for row in df.iterrows():
-            node_available = row[1]["STATE"] in ["mix", "idle", "alloc"]
+            # overview_df = overview_df[['Partition', 'Host', "Device", "State", "Mem (GB)", "CPUs", "GPUs", "Free IDX", "Feature"]]
 
             if row[1]['GRES'] != "(null)":
-                host_info = self.parse_gres(row[1]['GRES'], cluster)
+                device, ngpus = self.parse_gres(row[1]['GRES'], cluster)
             else:
                 continue
-
-            host_avail_info = self.parse_gres_used(row[1]['GRES_USED'], host_info["GPUs (Total)"], cluster)
-            host_info.update(host_avail_info)
-            if not node_available:
-                host_info["GPUs (Avail)"] = 0
-                host_info["Free IDX"] = []
-            else:
-                host_info["GPUs (Avail)"] = host_info['GPUs (Total)'] - host_info["GPUs (Avail)"]
-            host_info["GPUs"] = f"{host_info['GPUs (Avail)']}/{host_info['GPUs (Total)']}"
             
+            node_available = row[1]["STATE"] in ["mix", "idle", "alloc"]
+            if not node_available:
+                gpu_avail_idx = []
+            else:
+                device, gpu_avail_idx = self.parse_gres_used(row[1]['GRES_USED'], ngpus, cluster)
+            ngpus_avail = len(gpu_avail_idx)
+
+            host_info = OrderedDict()
+
+            host_info['Partition'] = str(row[1]["PARTITION"])
+            host_info['Host'] = str(row[1]["HOSTNAMES"])
+            host_info['Device'] = device
+            host_info['State'] = str(row[1]["STATE"])
+
             try:
-                host_info['Mem (Avail)'] = int(row[1]["FREE_MEM"]) // 1024
+                mem_avail = int(row[1]["FREE_MEM"]) // 1024
             except:
-                host_info['Mem (Avail)'] = row[1]["FREE_MEM"]
+                mem_avail = row[1]["FREE_MEM"]
+            # host_info['Mem (Avail)'] = mem_avail
             try:
-                host_info['Mem (Total)'] = int(row[1]["MEMORY"]) // 1024
+                mem_total = int(row[1]["MEMORY"]) // 1024
             except:
-                host_info['Mem (Total)'] = row[1]["MEMORY"]
-            host_info['Mem (GB)'] = f"{host_info['Mem (Avail)']}/{host_info['Mem (Total)']}"
+                mem_total = row[1]["MEMORY"]
+            # host_info['Mem (Total)'] = mem_total
+            host_info['Mem (GB)'] = f"{mem_avail}/{mem_total}"
 
             cpu_info = row[1]["CPUS(A/I/O/T)"].split("/")
-            host_info['CPUs (Avail)'] = cpu_info[1]
-            host_info['CPUs (Total)'] = cpu_info[3]
-            host_info['CPUs'] = f"{host_info['CPUs (Avail)']}/{host_info['CPUs (Total)']}"
+            ncpus_avail = cpu_info[1]
+            ncpus_total = cpu_info[3]
+            # host_info['CPUs (Avail)'] = ncpus_avail
+            # host_info['CPUs (Total)'] = ncpus_total
+            host_info['CPUs'] = f"{ncpus_avail}/{ncpus_total}"
 
-            host_info['Host'] = str(row[1]["HOSTNAMES"])
-            host_info['Partition'] = str(row[1]["PARTITION"])
-            host_info['State'] = str(row[1]["STATE"])
+            host_info['GPUs (Total)'] = ngpus
+            host_info['GPUs (Avail)'] = ngpus_avail
+            host_info["GPUs"] = f"{host_info['GPUs (Avail)']}/{ngpus}"
+            host_info['GPUs (Avail IDX)'] = f"[{','.join(str(idx) for idx in gpu_avail_idx)}]"
+
+            features = row[1]["AVAIL_FEATURES"]
+            if ',' in features:
+                unnamed_features = []
+                for feature in features.split(","):
+                    if ':' in feature:
+                        name, value = feature.split(':')
+                        host_info[name] = value
+                    else:
+                        unnamed_features.append(feature)
+            else:
+                unnamed_features = [features]
+            host_info['Feature'] = ','.join(unnamed_features)
 
             overview_df.append(host_info)
         overview_df = pd.DataFrame.from_records(overview_df).drop_duplicates("Host")
@@ -792,14 +819,13 @@ class SlurmUI(App):
             groups = match.groups()
             if self.verbose:
                 self.info_log.write(f"Parsed gres: {groups} from {gres_str}")
-            _, device, num_gpus, _ = groups
-            num_gpus = int(num_gpus)
+            _, device, ngpus, _ = groups
+            ngpus = int(ngpus)
         else:
             error_msg = f"Error parsing gres: {gres_str}"
             raise ValueError(error_msg)
 
-        return {"Device": device,
-                "GPUs (Total)": num_gpus}
+        return device, ngpus
 
     @handle_error
     def parse_gres_used(self, gres_used_str, num_total, cluster=None):
@@ -808,28 +834,28 @@ class SlurmUI(App):
             groups = match.groups()
             if self.verbose:
                 self.info_log.write(f"Parsed gres_used: {groups} from {gres_used_str}")
-            _, device, num_gpus, alloc_str = groups
-            num_gpus = int(num_gpus)
+            _, device, ngpus_used, alloc_str = groups
+            ngpus_used = int(ngpus_used)
         else:
             error_msg = f"Error parsing gres_used: {gres_used_str}"
             raise ValueError(error_msg)
 
-        alloc_gpus = []
+        gpu_used_idx = []
         if alloc_str:
             for gpu_ids in alloc_str.split(","):
                 if "-" in gpu_ids:
                     start, end = gpu_ids.split("-")
                     for i in range(int(start), int(end)+1):
-                        alloc_gpus.append(i)
+                        gpu_used_idx.append(i)
                 else:
                     if gpu_ids == "N/A":
                         pass
                     else:
-                        alloc_gpus.append(int(gpu_ids))
-                    
-        return {"Device": device,
-                "GPUs (Avail)": num_gpus,
-                "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
+                        gpu_used_idx.append(int(gpu_ids))
+            assert ngpus_used == len(gpu_used_idx), f"Number of used GPUs {ngpus_used} does not match parsed indices {gpu_used_idx} in gres_used: {gres_used_str}"
+
+        gpu_avail_idx = [idx for idx in range(num_total) if idx not in gpu_used_idx]
+        return device, gpu_avail_idx
 
     @handle_error
     def get_sacct(self, starttime="2024-11-26", endtime="now"):
