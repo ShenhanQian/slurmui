@@ -37,7 +37,8 @@ def handle_error(func):
         try:
             return func(self, *args, **kwargs)
         except Exception as e:
-            os.system(f"echo {e}")
+            self.info_log.write(f"Error ({func.__name__}): {e}")
+            os.system(f"echo 'Error ({func.__name__}): {e}'")
     return wrapper
 
 
@@ -783,64 +784,51 @@ class SlurmUI(App):
         return overview_df
     
     @handle_error
-    def parse_gres_used(self, gres_used_str, num_total, cluster=None):
-        try:
-            device = ""
-            alloc_str = "N/A"
-            if cluster == "lrz_ai":
-                try:
-                    _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
-                except:
-                    _, num_gpus = re.match("(.*):(.*)", gres_used_str).groups()
-            elif cluster == "tum_vcg":
-                _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\),.*", gres_used_str).groups()
-            else:
-                _, device, num_gpus, alloc_str = re.match("(.*):(.*):(.*)\\(IDX:(.*)\\).*", gres_used_str).groups()
-            
-            num_gpus = int(num_gpus)
-        except Exception as e:
-            self.info_log.write(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
-            self.info_log.write(e)
-            raise ValueError(f"Error parsing gres_used: \n\t{gres_used_str}\nCheck if the string matches the expected format")
-
-        alloc_gpus = []
-        for gpu_ids in alloc_str.split(","):
-            if "-" in gpu_ids:
-                start, end = gpu_ids.split("-")
-                for i in range(int(start), int(end)+1):
-                    alloc_gpus.append(i)
-            else:
-                if gpu_ids == "N/A":
-                    pass
-                else:
-                    alloc_gpus.append(int(gpu_ids))
-                
-        return {"Device": device,
-                "GPUs (Avail)": num_gpus,
-                "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
-
     def parse_gres(self, gres_str, cluster=None):
-        try:
-            device = ""
-            if cluster == "tum_vcg":
-                _, device, num_gpus = re.match("(.*):(.*):(.*),.*", gres_str).groups()
-            elif cluster == "lrz_ai":
-                try:
-                    _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
-                except:
-                    _, num_gpus = re.match("(.*):(.*)", gres_str).groups()
-            else:
-                _, num_gpus, _ = re.match("(.*):(.*)\\(S:(.*)\\)", gres_str).groups()
+        match = re.match(r"([^:]+)(?::([^:()]+))?:([^:(,]+)(?:\(S:([^)]+)\))?", gres_str)
 
+        if match:
+            groups = match.groups()
+            if self.verbose:
+                self.info_log.write(f"Parsed gres: {groups} from {gres_str}")
+            _, device, num_gpus, _ = groups
             num_gpus = int(num_gpus)
-        except Exception as e:
-            self.info_log.write(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
-            self.info_log.write(e)
-            raise ValueError(f"Error parsing gres: \n\t{gres_str}\nCheck if the string matches the expected format")
-        
+        else:
+            error_msg = f"Error parsing gres: {gres_str}"
+            raise ValueError(error_msg)
+
         return {"Device": device,
                 "GPUs (Total)": num_gpus}
 
+    @handle_error
+    def parse_gres_used(self, gres_used_str, num_total, cluster=None):
+        match = re.match(r"([^:]+)(?::([^:]+))?:([^:(,]+)(?:\(IDX:([^)]+)\))?", gres_used_str)
+        if match:
+            groups = match.groups()
+            if self.verbose:
+                self.info_log.write(f"Parsed gres_used: {groups} from {gres_used_str}")
+            _, device, num_gpus, alloc_str = groups
+            num_gpus = int(num_gpus)
+        else:
+            error_msg = f"Error parsing gres_used: {gres_used_str}"
+            raise ValueError(error_msg)
+
+        alloc_gpus = []
+        if alloc_str:
+            for gpu_ids in alloc_str.split(","):
+                if "-" in gpu_ids:
+                    start, end = gpu_ids.split("-")
+                    for i in range(int(start), int(end)+1):
+                        alloc_gpus.append(i)
+                else:
+                    if gpu_ids == "N/A":
+                        pass
+                    else:
+                        alloc_gpus.append(int(gpu_ids))
+                    
+        return {"Device": device,
+                "GPUs (Avail)": num_gpus,
+                "Free IDX": [idx for idx in range(num_total) if idx not in alloc_gpus]}
 
 def perform_scancel(job_id):
     os.system(f"""scancel {job_id}""")
