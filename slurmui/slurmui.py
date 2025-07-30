@@ -698,7 +698,7 @@ class SlurmUI(App):
             args = f"{sep},".join([
                 "JOBID:18",
                 "USERNAME:10",
-                "PARTITION:40",
+                "PARTITION:80",
                 "NAME:200",
                 "STATE:8",
                 "TimeUsed:10",
@@ -738,7 +738,18 @@ class SlurmUI(App):
         if DEBUG:
             response_string = SINFO_DEBUG
         else:
-            query_string = f"""sinfo -O 'Partition:25,NodeHost,Gres:500,GresUsed:500,StateCompact,FreeMem,Memory,CPUsState,Features:200'"""
+            args = f",".join([
+                "Partition:25",
+                "NodeHost",
+                "Gres:500",
+                "GresUsed:500",
+                "StateCompact",
+                "FreeMem",
+                "Memory",
+                "CPUsState",
+                "Features:200"
+            ])
+            query_string = f"""sinfo -O {args}"""
             if self.verbose:
                 self.info_log.write(query_string)
 
@@ -859,7 +870,18 @@ class SlurmUI(App):
 
     @handle_error
     def get_sacct(self, starttime="2024-11-26", endtime="now"):
-        query_string = f"""sacct --format="JobID,JobName,State,Start,Elapsed,NodeList,AllocTRES,Partition,StdOut" -P -X --starttime={starttime} --endtime={endtime}"""
+        args = f",".join([
+            "JobID",
+            "JobName",
+            "State",
+            "Start",
+            "Elapsed",
+            "NodeList",
+            "AllocTRES",
+            "Partition",
+            "StdOut"
+        ])
+        query_string = f"""sacct --format={args} -P -X --starttime={starttime} --endtime={endtime}"""
         if self.verbose:
             self.info_log.write(query_string)
 
