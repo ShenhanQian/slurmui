@@ -725,10 +725,6 @@ class SlurmUI(App):
         # remove years from start time
         df.loc[:, "START_TIME"] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
         
-        # remove seconds from time limit
-        max_length = df["TIME_LIMIT"].str.len().max()
-        df.loc[:, "TIME_LIMIT"] = df.loc[:, "TIME_LIMIT"].apply(lambda x: f"{x[:-3]:>{max_length-3}}")
-
         # simplify tres
         df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
         return df 
