@@ -1,6 +1,7 @@
 # SlurmUI
 
-Enhanced terminal UI for slurm. Derived from [SlurmUI](https://github.com/SirWyver/slurmui).
+Enhanced command-line UI to ease working with slurm. 
+Written in Python, derived from [SlurmUI](https://github.com/SirWyver/slurmui).
 
 Viewing and managing
 - GPUs
@@ -9,34 +10,45 @@ Viewing and managing
 - Logs for current and past jobs
 
 <div align="center"> 
-  <img src="demo.png">
+  <img src="asset/demo.png">
 </div>
 
-## Install
+## Install and run
 ```shell
-pip install git+https://github.com/ShenhanQian/slurmui.git
-```
-
-## Usage
-
-```shell
-slurmui -c <cluster name>
+pip install -U git+https://github.com/ShenhanQian/slurmui.git
+slurmui
 ```
 Optional arguments:
-- `-i` update interval in seconds, 5 by default. Set to 0 to disable.
+- `-i` update interval in seconds. (10 by default. Set to 0 to disable).
+- `-v` verbose mode (printing info and error to the info panel).
+- `-r` time range of history jobs to load (1 week by default))
+- `-c` cluster name (deprecated as the latest version of SlurmUI does not have cluster-specific configuration).
+
+## Basics
+Under the interface of SlurmUI we rely on three basic slurm commands:
+- `sinfo` for information of nodes, GPUs, etc.
+- `squeue` for current jobs in the queue
+- `sacct` for history jobs
+
+Make sure you can get meaningful output from these commands on your cluster before trying SlurmUI.
+
+To debug, you could srun `slurmui` with `-i 0` to disable auto update and `-v` to force verbose logging. Then, you will see the full commands that slurmui sends to slurm in the info panel.
+
+<div align="center"> 
+  <img src="asset/verbose_info.png">
+</div>
+
+## Supported Clusters
+- [TUM CVG](https://cvg.cit.tum.de/)
+- [TUM VCG](https://www.niessnerlab.org/)
+- [LRZ AI](https://doku.lrz.de/lrz-ai-systems-11484278.html)
 
 > [!NOTE]
-> Due to the difference between slurm settings, the program can fail when parsing results from `sinfo`. Therefore, you need to specify the cluster name for special cases.
+> If SlurmUI does not work on your cluster, try the debugging suggestions in [Basics](README.md#basics) and feel free to open an issue.
 
-| Cluster | Argument | Comment |
-|-|-|-|
-| [TUM CVG](https://cvg.cit.tum.de/) | | Works with the default setting. |
-| [TUM VCG](https://www.niessnerlab.org/) | `-c tum_vcg` | Formats of Gres and GresUsed are different. |
-| [LRZ AI](https://doku.lrz.de/lrz-ai-systems-11484278.html) | `-c lrz_ai` | Formats of Gres and GresUsed are different. |
-
-For other clusters, you can first try running `slurmui` without arguments. If failed, you will need to add if-else sentences for your special cases. 
-
-## Troubleshooting
-- ### `AttributeError: 'NoneType' object has no attribute 'groups'`
-
-    Search in the repository for places where `sinfo` is called with the output format specifies like `-O 'Partition:25,NodeHost,Gres:80,GresUsed:80,StateCompact,FreeMem,CPUsState'`. The width for some items(s) may not be enough, causing a problem to splitting the string into columns.
+## Contributions
+Open to contribution including but not limited to:
+- Improving startup/launch speed
+- Enhancing multithreading and concurrency handling
+- Strengthening crash recovery and process resiliency
+- Expanding features or addressing edge cases
