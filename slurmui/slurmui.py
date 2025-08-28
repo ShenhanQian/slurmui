@@ -727,7 +727,7 @@ class SlurmUI(App):
         df.loc[:, "START_TIME"] = df.loc[:, "START_TIME"].apply(lambda x: simplify_start_time(x))
         
         # simplify tres
-        df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
+        # df.loc[:, "TRES_ALLOC"] = df.loc[:, "TRES_ALLOC"].apply(simplify_tres)
         return df 
     
     @handle_error
