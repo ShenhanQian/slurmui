@@ -298,6 +298,8 @@ class SlurmUI(App):
     @run_in_thread
     @handle_error
     def auto_refresh(self):
+        if self.verbose:
+            self.info_log.write("Auto-refreshing...")
         if self.STAGE["action"] == "job":
             self.update_table("job")
         elif self.STAGE["action"] == "job_log":
