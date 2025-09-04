@@ -713,7 +713,7 @@ class SlurmUI(App):
             args = f"{sep},".join([
                 "JOBID:18",
                 "USERNAME:10",
-                "PRIORITYLONG:15",
+                "PRIORITY:8",
                 "PARTITION:80",
                 "NAME:200",
                 "STATE:8",
