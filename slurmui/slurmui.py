@@ -68,9 +68,10 @@ class SlurmUI(App):
     }
     stats = {}
     selected_jobid = []
-    show_all_nodes = False
-    show_all_history = True
-    show_all_jobs = False
+    only_available_nodes = True
+    only_completed_history = False
+    only_running_jobs = False
+    only_my_jobs = True
 
     theme = "textual-dark"
     selected_text_style = "bold on orange3"
@@ -94,6 +95,7 @@ class SlurmUI(App):
         Binding("G", "print_gpustat", "GPU"),
         Binding("l", "display_job_log", "Log"),
         Binding("L", "open_with_less", "Open with less"),
+        Binding("J", "toggle_user_range", "State"),
         Binding("H", "toggle_history_range", "Range"),
     ]
 
@@ -181,6 +183,8 @@ class SlurmUI(App):
             return False
         elif action == "open_with_less" and self.STAGE['action'] not in ['job', 'job_log', 'history']:
             return False
+        elif action == "toggle_user_range" and self.STAGE['action'] != 'job':
+            return False
         elif action == "toggle_history_range" and self.STAGE['action'] != 'history':
             return False
         return True
@@ -195,7 +199,7 @@ class SlurmUI(App):
             self.refresh_bindings()
             self.tabs.active = "node"
         elif self.STAGE["action"] == "node":
-            self.show_all_nodes = not self.show_all_nodes
+            self.only_available_nodes = not self.only_available_nodes
             self.rewrite_table("node", keep_state=True)
             self.switch_display("node")
 
@@ -209,7 +213,7 @@ class SlurmUI(App):
             self.refresh_bindings()
             self.tabs.active = "history"
         elif self.STAGE["action"] == "history":
-            self.show_all_history = not self.show_all_history
+            self.only_completed_history = not self.only_completed_history
             self.rewrite_table("history", keep_state=True)
             self.switch_display("history")
     
@@ -223,7 +227,7 @@ class SlurmUI(App):
             self.refresh_bindings()
             self.tabs.active = "job"
         elif self.STAGE["action"] == "job":
-            self.show_all_jobs = not self.show_all_jobs
+            self.only_running_jobs = not self.only_running_jobs
             self.rewrite_table("job", keep_state=True)
             self.refresh_bindings()
             self.switch_display("job")
@@ -392,6 +396,14 @@ class SlurmUI(App):
                     # Restore the original SIGINT handler
                     signal.signal(signal.SIGINT, original_sigint)
             self.refresh()
+    
+    @handle_error
+    def action_toggle_user_range(self):
+        if self.STAGE["action"] == "job":
+            self.only_my_jobs = not self.only_my_jobs
+            self.rewrite_table("job", keep_state=True)
+            self.refresh_bindings()
+            self.switch_display("job")
 
     @handle_error
     def action_toggle_history_range(self):
@@ -413,12 +425,13 @@ class SlurmUI(App):
             self.info_log.clear()
 
         if tab_id == "node":
-            info = f"Press 'g' to toggle nodes: {'All' if self.show_all_nodes else 'Available'}"
+            info = f"Press 'g' to toggle nodes: {'Available' if self.only_available_nodes else 'All'}"
         elif tab_id == "history":
-            info = f"Press 'h' to toggle job states: {'All' if self.show_all_history else 'Complete'}\t| " \
+            info = f"Press 'h' to toggle job states: {'Completed' if self.only_completed_history else 'All'}\t| " \
             + f"Press 'H' to toggle history range: {self.history_range}"
         elif tab_id == "job":
-            info = f"Press 'j' to toggle users: {'All' if self.show_all_jobs else 'Me'}"
+            info = f"Press 'j' to toggle job states: {'Running' if self.only_running_jobs else 'All'}\t|" \
+            + f" Press 'J' to toggle user range: {'Me' if self.only_my_jobs else 'All'}"
         self.info_log.write(info)
 
     def switch_display(self, action):
@@ -497,7 +510,7 @@ class SlurmUI(App):
 
     @handle_error
     def query_jobs(self, sort_column=None, sort_ascending=True):
-        squeue_df = self.get_squeue(self.cluster, self.show_all_jobs) 
+        squeue_df = self.get_squeue(self.cluster, self.only_my_jobs, self.only_running_jobs) 
         if sort_column is not None:
             squeue_df = squeue_df.sort_values(squeue_df.columns[sort_column], ascending=sort_ascending)
 
@@ -652,7 +665,7 @@ class SlurmUI(App):
         overview_df = self.get_sinfo(self.cluster)
         self.stats['ngpus'] = overview_df["GPUs (Total)"].sum()
         self.stats['ngpus_avail'] = overview_df["GPUs (Avail)"].sum()
-        if not self.show_all_nodes:
+        if self.only_available_nodes:
             # filter out nodes with no available GPUs
             overview_df = overview_df[overview_df["GPUs (Avail)"] > 0]
         
@@ -672,7 +685,7 @@ class SlurmUI(App):
         
         self.stats['nhistory'] = len(sacct_df)
 
-        if not self.show_all_history:
+        if self.only_completed_history:
             sacct_df = sacct_df[sacct_df["State"] == "COMPLETED"]
 
         self.stats['nhistory_completed'] = len(sacct_df)
@@ -692,7 +705,7 @@ class SlurmUI(App):
             return "2024-11-26"
     
     @handle_error
-    def get_squeue(self, cluster=None, show_all_jobs=False):
+    def get_squeue(self, cluster=None, only_my_jobs=True, only_running_jobs=False):
         sep = "|"
         if DEBUG:
             response_string = SQUEUE_DEBUG
@@ -714,8 +727,10 @@ class SlurmUI(App):
             if self.verbose:
                 self.info_log.write(query_string)
 
-            if not show_all_jobs:
+            if only_my_jobs:
                 query_string += " --me"
+            if only_running_jobs:
+                query_string += " --state=RUNNING"
             response_string = subprocess.check_output(query_string, shell=True).decode("utf-8")
         compact_string = re.sub(' +', '', response_string)
         data = io.StringIO(compact_string)
